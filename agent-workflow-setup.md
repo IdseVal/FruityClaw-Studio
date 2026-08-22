@@ -17,7 +17,7 @@ tied to a particular codebase.
 5. [Step 2 — The container](#5-step-2--the-container)
 6. [Step 3 — Skills](#6-step-3--skills)
 7. [Step 4 — The agents](#7-step-4--the-agents)
-8. [Step 5 — Routing](#8-step-5--routing)
+8. [Step 5 — Routing and dispatch](#8-step-5--routing-and-dispatch)
 9. [Step 6 — Running the workflow, A to G](#9-step-6--running-the-workflow-a-to-g)
 10. [The circuit breaker](#10-the-circuit-breaker)
 11. [The FMEA protocol](#11-the-fmea-protocol)
@@ -88,6 +88,23 @@ the host daemon — enough to start a privileged container that mounts the host 
 is not isolation. Mount it only if you need container-in-container testing, and record that
 you made the trade.
 
+### The Dispatcher is a process, not a prompt
+
+The Dispatcher is often mistaken for a chat agent because its policy sits next to the six
+real agent prompts at `~/.orca/roles/dispatcher.md` (the shared, host-level roles directory
+every project uses — see section 7). **It is not.** It is a running poll-and-dispatch
+process on the host: `.orca/dispatcher/dispatch.py`. The prompt file records the *policy*;
+the script *is* the runtime.
+
+An LLM in an infinite poll loop is wasteful and unreliable — that is why the runtime is
+deterministic Python. Deploying the workflow without starting `dispatch.py` leaves you with
+a Dispatcher that exists only on paper: issues sit unrouted, the pipeline stalls silently,
+and nothing tells you why.
+
+Orca is a local desktop application. GitHub webhooks have nowhere on your machine to land.
+**The Dispatcher polls, it does not receive events.** Any doc, prompt or diagram that says
+"a webhook notifies the Dispatcher" is describing intent, not mechanism.
+
 ---
 
 ## 2. Prerequisites
@@ -112,9 +129,10 @@ you made the trade.
 .orca/
   dispatch.yml            labels -> roles -> skills; pipelines; circuit breaker
   setup_skills.sh         fetches every skill
-  system_prompts/
-    dispatcher.md  po-analyst.md  architect.md  researcher.md
-    developer.md   tester.md      reviewer.md
+  dispatcher/
+    dispatch.py           the poller: gh issue list -> orca worktree create
+    README.md             how to run, when it retries, how to reset state
+    state.json            (gitignored) what has been dispatched, cycle counts
 docs/
   CORE_DOCUMENT.md        the single source of truth; everything derives from it
   specs/                  derived specifications
@@ -126,10 +144,16 @@ mail/
 .gitattributes            *.sh pinned to LF
 ```
 
+The seven role prompts (`dispatcher.md`, `po-analyst.md`, `architect.md`, `researcher.md`,
+`developer.md`, `tester.md`, `reviewer.md`) are **not** part of this per-project layout.
+They live at **`~/.orca/roles/`** on the host and are shared across every project this
+workflow drives. Section 7 has the seed content — you populate `~/.orca/roles/` **once per
+machine**, not once per repo.
+
 Create it:
 
 ```bash
-mkdir -p .devcontainer .orca/system_prompts docs/adrs docs/specs mail .github/workflows
+mkdir -p .devcontainer .orca/dispatcher docs/adrs docs/specs mail .github/workflows
 ```
 
 ---
@@ -445,21 +469,38 @@ chmod +x .orca/setup_skills.sh .devcontainer/post-create.sh
 
 ## 7. Step 4 — The agents
 
-Seven agents. Each block below is a complete system prompt; write it to the path given.
+**The role prompts are HOST-LEVEL and shared across every project this workflow drives.**
+They live at `~/.orca/roles/`, not in any repo. Populate the directory **once per machine**
+from the seven reference blocks below; do not paste them into the project you are setting
+up. A per-project copy is exactly the failure mode that produces drift, and the reason
+this section was rewritten.
 
-| Agent | File | Owns | May merge |
+Six agents plus one policy file. `dispatcher.md` is a POLICY document, not a system prompt
+— it records the rules the Dispatcher process (`.orca/dispatcher/dispatch.py`, section 8)
+enforces. Editing one without the other guarantees drift.
+
+| Role | Host path | Owns | May merge |
 | --- | --- | --- | --- |
-| Dispatcher | `.orca/system_prompts/dispatcher.md` | Worktrees, routing, circuit breaker | nothing |
-| PO & Analyst | `.orca/system_prompts/po-analyst.md` | `docs/CORE_DOCUMENT.md`, specs, ADRs, issues | nothing |
-| Architect | `.orca/system_prompts/architect.md` | Contracts, schemas, module boundaries | nothing |
-| Researcher | `.orca/system_prompts/researcher.md` | Facts about external systems, bug localisation | nothing |
-| Developer | `.orca/system_prompts/developer.md` | Implementation inside one worktree | nothing |
-| Testing | `.orca/system_prompts/tester.md` | FMEA, test suites, test execution | nothing |
-| Reviewer | `.orca/system_prompts/reviewer.md` | Standards, spec compliance | **`dev` only** |
+| Dispatcher (policy, not an agent) | `~/.orca/roles/dispatcher.md` | Runtime policy (enforced by `.orca/dispatcher/dispatch.py`) | nothing |
+| PO & Analyst | `~/.orca/roles/po-analyst.md` | `docs/CORE_DOCUMENT.md`, specs, ADRs, issues | nothing |
+| Architect | `~/.orca/roles/architect.md` | Contracts, schemas, module boundaries | nothing |
+| Researcher | `~/.orca/roles/researcher.md` | Facts about external systems, bug localisation | nothing |
+| Developer | `~/.orca/roles/developer.md` | Implementation inside one worktree | nothing |
+| Testing | `~/.orca/roles/tester.md` | FMEA, test suites, test execution | nothing |
+| Reviewer | `~/.orca/roles/reviewer.md` | Standards, spec compliance | **`dev` only** |
 
 Nobody merges to `main`. That is the human's, always.
 
-### A. Dispatcher Agent — `.orca/system_prompts/dispatcher.md`
+Seed the host directory on a fresh machine:
+
+```bash
+mkdir -p ~/.orca/roles
+# then write each of the seven blocks below to the path in its subheading.
+# The Orca desktop GUI picks these up automatically; the dispatcher process
+# (.orca/dispatcher/dispatch.py) reads them via `Path.home() / ".orca" / "roles"`.
+```
+
+### A. Dispatcher — `~/.orca/roles/dispatcher.md`
 
 ```markdown
 You are the Dispatcher Agent in an ORCA ADE setup.
@@ -477,7 +518,7 @@ CIRCUIT BREAKER SAFETY RULES:
   4. DO NOT loop back to the Developer Agent.
 ```
 
-### B. PO & Analyst Agent — `.orca/system_prompts/po-analyst.md`
+### B. PO & Analyst — `~/.orca/roles/po-analyst.md`
 
 ```markdown
 You are the PO & Analyst Agent.
@@ -518,7 +559,7 @@ FORBIDDEN:
 - You are STRICTLY FORBIDDEN from merging any branch into `main`.
 ```
 
-### C. Architect Agent — `.orca/system_prompts/architect.md`
+### C. Architect — `~/.orca/roles/architect.md`
 
 ```markdown
 You are the Architect Agent.
@@ -545,7 +586,7 @@ FORBIDDEN:
 - You are STRICTLY FORBIDDEN from merging any branch into `main`.
 ```
 
-### D. Researcher Agent — `.orca/system_prompts/researcher.md`
+### D. Researcher — `~/.orca/roles/researcher.md`
 
 ```markdown
 You are the Researcher Agent.
@@ -569,7 +610,7 @@ FORBIDDEN:
 - You are STRICTLY FORBIDDEN from merging any branch into `main`.
 ```
 
-### E. Developer Agent — `.orca/system_prompts/developer.md`
+### E. Developer — `~/.orca/roles/developer.md`
 
 ```markdown
 You are the Developer Agent.
@@ -605,7 +646,7 @@ FORBIDDEN:
 - You are STRICTLY FORBIDDEN from merging any branch into `main`.
 ```
 
-### F. Testing Agent — `.orca/system_prompts/tester.md`
+### F. Testing — `~/.orca/roles/tester.md`
 
 ```markdown
 You are the Testing Agent.
@@ -623,7 +664,7 @@ HYBRID TESTING STRATEGY:
   4. Once confirmed by the user, write the full test suite.
 ```
 
-### G. Reviewer Agent — `.orca/system_prompts/reviewer.md`
+### G. Reviewer — `~/.orca/roles/reviewer.md`
 
 ```markdown
 You are the Reviewer Agent.
@@ -640,7 +681,7 @@ MERGE CONTROL:
 
 ---
 
-## 8. Step 5 — Routing
+## 8. Step 5 — Routing and dispatch
 
 ### `.orca/dispatch.yml`
 
@@ -652,24 +693,20 @@ branches:
   protected: [main]          # no agent may merge into these
   worktree_prefix: feature/
 
+# Role prompts are HOST-LEVEL at ~/.orca/roles/ and shared across every project.
+# The dispatcher process reads them from there; nothing here names a repo-relative path.
 roles:
   po-analyst:
-    prompt: .orca/system_prompts/po-analyst.md
     skills: [handoff, grill-with-docs, domain-modeling]
   architect:
-    prompt: .orca/system_prompts/architect.md
     skills: [handoff, improve-codebase-architecture, codebase-design]
   researcher:
-    prompt: .orca/system_prompts/researcher.md
     skills: [handoff, just-scrape, diagnosing-bugs]
   developer:
-    prompt: .orca/system_prompts/developer.md
     skills: [handoff]        # baseline; labels add to it
   tester:
-    prompt: .orca/system_prompts/tester.md
     skills: [handoff, tdd, webapp-testing]
   reviewer:
-    prompt: .orca/system_prompts/reviewer.md
     skills: [handoff, code-review]
 
 # A label is a claim about the work. It earns the skills that work needs and no others:
@@ -726,13 +763,62 @@ evidence_gates:
 ### Create the labels
 
 ```bash
-gh label create ui      --description "Interface work; loads the design skills"
-gh label create seo     --description "Search work; loads seo-audit"
-gh label create scraper --description "External data acquisition; loads just-scrape"
-gh label create bug     --description "Defect; loads diagnosing-bugs"
-gh label create data    --description "Data or pipeline; evidence gate applies"
-gh label create trivial --description "Skips the tester, never the reviewer"
+gh label create ui        --description "Interface work; loads the design skills"
+gh label create seo       --description "Search work; loads seo-audit"
+gh label create scraper   --description "External data acquisition; loads just-scrape"
+gh label create bug       --description "Defect; loads diagnosing-bugs"
+gh label create data      --description "Data or pipeline; evidence gate applies"
+gh label create trivial   --description "Skips the tester, never the reviewer"
+gh label create ready     --description "Approved for dispatch; the poller picks it up"
+gh label create escalated --description "Circuit breaker tripped; the poller stops touching this issue"
 ```
+
+### The dispatcher process
+
+Routing is not automation. `dispatch.yml` names which labels earn which skills; the
+Dispatcher process is what actually reads open issues and creates worktrees. Skip this
+step and nothing runs, however complete the rest of the setup looks.
+
+**Prerequisites on the host** (not inside the container — the poller calls `orca`, a host
+desktop app):
+
+- Python 3.9+ and PyYAML.
+- `gh` authenticated for this repo (`gh auth status`).
+- `orca` on PATH; Orca open (`orca status` reports `runtimeReachable: true`).
+- The `ready` and `escalated` labels from the block above.
+
+**What the poller does, in order:**
+
+1. Calls `gh issue list --state open --label ready --json …` every `--interval` seconds
+   (default 60).
+2. Filters out issues already in `state.json` and issues carrying the `escalated` label.
+3. For each remaining issue: computes the pipeline (`trivial` if labelled `trivial` and
+   free of `ui`/`scraper`/`data`; else `default`), computes the skills earned by labels
+   per `dispatch.yml`, and builds a Developer prompt from `~/.orca/roles/developer.md`
+   + issue body + a DISPATCH CONTEXT block containing pipeline, cycle count, labels.
+4. `orca worktree create --repo path:<repo> --name feature/issue-<n> --issue <n>
+   --base-branch dev --agent claude --prompt "<built prompt>"`.
+5. Records the dispatch in `state.json` and comments on the issue with the worktree name
+   and cycle count.
+
+**Running it** — two supported shapes:
+
+```bash
+# Foreground, one terminal. Ctrl+C to stop.
+python .orca/dispatcher/dispatch.py
+
+# One tick and exit — for Windows Task Scheduler / cron / Orca automation.
+python .orca/dispatcher/dispatch.py --once
+```
+
+Never leave both a foreground poller AND a scheduled `--once` running against the same
+repo: `state.json` is not locked between processes and you will double-dispatch.
+
+**Circuit breaker (see also section 11).** `max_cycles: 3` in `dispatch.yml`. The
+Dispatcher increments a cycle count each time it opens a worktree for an issue; on the
+fourth request it does not create a worktree. Instead it posts
+`Circuit breaker tripped: 3 failed attempts.` on the issue, adds the `escalated` label,
+and stops touching that issue. Do not raise `max_cycles`.
 
 ---
 
@@ -973,6 +1059,10 @@ plans claim, and every one of them fails the setup for everybody rather than for
 | Shell scripts from a Windows host | CRLF reaches bash unchanged because the container mounts the working tree, not a fresh checkout. Fails as `set: pipefail: invalid option name`. |
 | `npm ci` over a bind mount | Replaces the host's `node_modules` with Linux binaries and breaks the host's tooling. Shadow it with a volume. |
 | Skill names taken from a plan | Read them back with `--list` before committing them. |
+| `~/.orca/roles/dispatcher.md` alone is a runtime | It is not. The runtime is `.orca/dispatcher/dispatch.py`. Without that script running, no issues get routed and the whole pipeline stalls silently. |
+| "A webhook notifies the Dispatcher" | Orca is a host desktop app; webhooks have nowhere to arrive. The Dispatcher POLLS `gh`. Any wording implying event-driven dispatch is aspirational. |
+| Dispatcher counted as one of the seven roles | It is not an agent. The seven files in `~/.orca/roles/` include one policy file (`dispatcher.md`) and six agent prompts (`po-analyst`, `architect`, `researcher`, `developer`, `tester`, `reviewer`). Only the six are dispatched by Orca. |
+| Role prompts pasted per project (`.orca/system_prompts/`) | Do not. Roles are HOST-LEVEL at `~/.orca/roles/` and shared across every project this workflow drives. A per-project copy is exactly the drift trap this convention exists to prevent. |
 
 ---
 
@@ -985,10 +1075,13 @@ plans claim, and every one of them fails the setup for everybody rather than for
 [ ] npx skills list shows every skill in the matrix
 [ ] Large data mounts read-only; a write probe inside the container is refused
 [ ] The project's own test suite passes inside the container
-[ ] .orca/system_prompts/ holds all seven prompts
+[ ] ~/.orca/roles/ on this host holds all seven role files (six agents + dispatcher.md policy) — populated ONCE per machine, never per project
 [ ] .orca/dispatch.yml names your labels, pipelines and gates
 [ ] Every agent prompt forbids merging to main; only the Reviewer may merge to dev
-[ ] gh labels created: ui seo scraper bug data trivial
+[ ] gh labels created: ui seo scraper bug data trivial ready escalated
+[ ] .orca/dispatcher/dispatch.py exists and `python .orca/dispatcher/dispatch.py --once` exits 0
+[ ] The Dispatcher process is actually running — a foreground terminal, a scheduled --once, or an Orca automation — not just present in the repo
+[ ] Only ONE dispatcher process is running against this repo (state.json is not locked between processes)
 [ ] python mail/daily_digest.py --print renders a real day
 [ ] Branch protection on main: no direct pushes, pull request required
 [ ] SMTP secrets set, or deliberately unset so the digest prints to the log
