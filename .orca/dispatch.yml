@@ -1,0 +1,76 @@
+version: 1
+
+branches:
+  base: dev
+  protected: [main]          # no agent may merge into these
+  worktree_prefix: feature/
+
+roles:
+  po-analyst:
+    prompt: .orca/system_prompts/po-analyst.md
+    skills: [handoff, grill-with-docs, domain-modeling]
+  architect:
+    prompt: .orca/system_prompts/architect.md
+    skills: [handoff, improve-codebase-architecture, codebase-design]
+  researcher:
+    prompt: .orca/system_prompts/researcher.md
+    skills: [handoff, just-scrape, diagnosing-bugs]
+  developer:
+    prompt: .orca/system_prompts/developer.md
+    skills: [handoff]        # baseline; labels add to it
+  tester:
+    prompt: .orca/system_prompts/tester.md
+    skills: [handoff, tdd, webapp-testing]
+  reviewer:
+    prompt: .orca/system_prompts/reviewer.md
+    skills: [handoff, code-review]
+
+# A label is a claim about the work. It earns the skills that work needs and no others:
+# loading the whole design stack for a typo is how small work becomes too expensive to do.
+labels:
+  ui:
+    skills: [frontend-design, web-design-guidelines, high-end-visual-design]
+  seo:
+    skills: [seo-audit]
+  scraper:
+    skills: [just-scrape]
+  bug:
+    skills: [diagnosing-bugs]
+  data:
+    skills: [codebase-design]
+
+pipelines:
+  default:
+    stages: [developer, tester, reviewer]
+
+  # `trivial` skips the TESTER, never the reviewer. For a typo, a comment, a version bump or
+  # a doc edit a test author has nothing to write, and every line is still read before it
+  # lands. The REVIEWER refuses the label when the change turns out to touch behaviour: it is
+  # a request, not a permission.
+  trivial:
+    stages: [developer, reviewer]
+    forbid_labels: [ui, scraper, data]
+
+circuit_breaker:
+  max_cycles: 3
+  on_trip:
+    freeze_worktree: true
+    halt_automation: true
+    assign_to: human
+    attach: [diff, test_output, agent_transcript_tail]
+
+evidence_gates:
+  - id: counts-reconciled
+    applies_to: [data, pipeline]
+    requires: >-
+      A count from the run reconciled against a count from an independent source, both quoted
+      in the pull request. "It completed" is not a count.
+  - id: output-sampled
+    applies_to: [data, ui]
+    requires: >-
+      A sample of the actual output pasted into the pull request. Enough rows that a wrong
+      one would be visible.
+  - id: cost-measured
+    applies_to: [pipeline]
+    requires: >-
+      The measured cost of the change against its budget, where one is documented.

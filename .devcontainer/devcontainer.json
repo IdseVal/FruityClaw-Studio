@@ -1,0 +1,36 @@
+{
+  "name": "Agent workspace",
+
+  "build": { "dockerfile": "Dockerfile" },
+  "workspaceFolder": "/workspace",
+
+  // Large datasets are mounted, not copied, and mounted READ-ONLY: a container that can
+  // delete the data can destroy something expensive or impossible to rebuild. The host path
+  // is read from the environment so no machine-specific path is committed. Leave the variable
+  // unset and the container still opens; only the commands needing that data are unavailable.
+  "mounts": [
+    "source=${localEnv:PROJECT_DATA_HOST_DIR},target=/data,type=bind,readonly"
+  ],
+
+  // No docker.sock. See "Isolation" above.
+
+  "remoteEnv": {
+    "PROJECT_DATA_DIR": "/data"
+  },
+
+  "postCreateCommand": "bash .devcontainer/post-create.sh",
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "charliermarsh.ruff",
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/opt/venv/bin/python"
+      }
+    }
+  }
+}

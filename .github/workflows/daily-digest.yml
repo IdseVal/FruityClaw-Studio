@@ -1,0 +1,48 @@
+name: Daily agent digest
+
+on:
+  schedule:
+    - cron: '10 18 * * *'      # off the hour: GitHub queues the hour heavily
+  workflow_dispatch:
+    inputs:
+      day:
+        description: 'Day to report, YYYY-MM-DD. Empty means today (UTC).'
+        type: string
+        default: ''
+      print_only:
+        description: 'Render into the log and send no mail'
+        type: boolean
+        default: true
+
+concurrency:
+  group: daily-digest
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # a shallow clone reports an empty day, every day
+          ref: dev
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Render and send
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SMTP_SENDER_EMAIL: ${{ secrets.SMTP_SENDER_EMAIL }}
+          SMTP_RECEIVER_EMAIL: ${{ secrets.SMTP_RECEIVER_EMAIL }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+        run: |
+          args=(--branch dev)
+          if [ -n "${{ inputs.day }}" ]; then args+=(--day "${{ inputs.day }}"); fi
+          if [ "${{ inputs.print_only }}" = "true" ]; then args+=(--print); fi
+          python mail/daily_digest.py "${args[@]}"
