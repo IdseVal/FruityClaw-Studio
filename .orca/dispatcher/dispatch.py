@@ -42,10 +42,25 @@ DISPATCH_CONFIG = REPO_ROOT / ".orca" / "dispatch.yml"
 ROLES_DIR = Path.home() / ".orca" / "roles"
 
 STATE_FILE = REPO_ROOT / ".orca" / "dispatcher" / "state.json"
+PROMPTS_DIR = REPO_ROOT / ".orca" / "dispatcher" / "prompts"
 
 READY_LABEL = "ready"
 ESCALATED_LABEL = "escalated"
 ROLE_LABEL_PREFIX = "role:"
+
+# PR pipeline signals. Tester adds state:tested on pass; either agent adds state:blocked
+# to hand the PR back to the human.
+TESTED_LABEL = "state:tested"
+BLOCKED_LABEL = "state:blocked"
+
+# Terminal readiness wait for spawned Claude agents. Prompts sent to the Tester and
+# Reviewer are also written to `.orca/dispatcher/prompts/pr-<n>-<role>.txt` first so a
+# human can inspect exactly what the dispatcher fed each agent when triaging.
+TERMINAL_READY_TIMEOUT_MS = 60_000
+
+# Regex-free parse of `feature/issue-<n>` branch names.
+FEATURE_BRANCH_PREFIX = "feature/issue-"
+
 DEFAULT_POLL_INTERVAL_SECONDS = 60
 SUBPROCESS_TIMEOUT_SECONDS = 120
 
@@ -70,13 +85,23 @@ class DispatchState:
 
     ``dispatched[str(issue_number)]`` holds a dict with:
       - ``cycle``          — count of dispatches so far
+      - ``role``           — the role loaded from ~/.orca/roles/<role>.md
       - ``worktree_name``  — feature/issue-<n>
       - ``worktree_id``    — Orca worktree id, if the create call reported one
-      - ``pipeline``       — default | trivial
+      - ``pipeline``       — default | trivial | <role name>
       - ``escalated``      — true once the breaker trips
+      - ``role_missing``   — true if the issue lacked a usable role:* label
+
+    ``prs[str(pr_number)]`` holds a dict with:
+      - ``stage``          — tester_dispatched | reviewer_dispatched | blocked
+      - ``worktree_id``    — where the tester/reviewer terminals live
+      - ``issue_number``   — the originating issue, if parseable from the branch
+      - ``tester_terminal``   — terminal handle for the Tester session, if any
+      - ``reviewer_terminal`` — terminal handle for the Reviewer session, if any
     """
 
     dispatched: dict[str, dict[str, Any]] = field(default_factory=dict)
+    prs: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     @classmethod
     def load(cls) -> "DispatchState":
@@ -90,13 +115,19 @@ class DispatchState:
                 file=sys.stderr,
             )
             return cls()
-        return cls(dispatched=raw.get("dispatched", {}))
+        return cls(
+            dispatched=raw.get("dispatched", {}),
+            prs=raw.get("prs", {}),
+        )
 
     def save(self) -> None:
         STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
         tmp = STATE_FILE.with_suffix(".tmp")
         tmp.write_text(
-            json.dumps({"dispatched": self.dispatched}, indent=2),
+            json.dumps(
+                {"dispatched": self.dispatched, "prs": self.prs},
+                indent=2,
+            ),
             encoding="utf-8",
         )
         tmp.replace(STATE_FILE)
@@ -168,6 +199,247 @@ def gh_add_label(issue_number: int, label: str) -> None:
 
 def gh_comment(issue_number: int, body: str) -> None:
     _run(["gh", "issue", "comment", str(issue_number), "--body", body])
+
+
+def gh_list_open_prs_to_dev() -> list[dict[str, Any]]:
+    """Every open PR whose base is ``dev``. Empty on any failure."""
+
+    ok, out = _run(
+        [
+            "gh",
+            "pr",
+            "list",
+            "--state",
+            "open",
+            "--base",
+            "dev",
+            "--limit",
+            "200",
+            "--json",
+            "number,title,body,labels,url,headRefName",
+        ]
+    )
+    if not ok or not out.strip():
+        return []
+    try:
+        return json.loads(out)
+    except json.JSONDecodeError as exc:
+        print(f"!! gh returned bad JSON: {exc}", file=sys.stderr)
+        return []
+
+
+def gh_pr_comment(pr_number: int, body: str) -> None:
+    _run(["gh", "pr", "comment", str(pr_number), "--body", body])
+
+
+def gh_pr_add_label(pr_number: int, label: str) -> None:
+    _run(["gh", "pr", "edit", str(pr_number), "--add-label", label])
+
+
+def _issue_number_from_branch(branch: str) -> int | None:
+    """Parse ``feature/issue-<n>`` (with or without a leading ``refs/heads/``)."""
+
+    stripped = branch.removeprefix("refs/heads/")
+    if not stripped.startswith(FEATURE_BRANCH_PREFIX):
+        return None
+    tail = stripped[len(FEATURE_BRANCH_PREFIX):]
+    number_str, _, _ = tail.partition("/")
+    try:
+        return int(number_str)
+    except ValueError:
+        return None
+
+
+def find_worktree_selector_for_branch(branch: str) -> str | None:
+    """Return an ``orca`` worktree selector for the worktree checked out on ``branch``.
+
+    Looks the worktree up via ``orca worktree list --json`` and returns a
+    ``branch:<name>`` selector when the branch matches. Returns None if Orca reports
+    no such worktree — the caller should defer and try again next tick.
+    """
+
+    ok, out = _run(["orca", "worktree", "list", "--json"])
+    if not ok or not out.strip():
+        return None
+    try:
+        payload = json.loads(out)
+    except json.JSONDecodeError:
+        return None
+    worktrees = ((payload.get("result") or {}).get("worktrees")) or []
+    stripped = branch.removeprefix("refs/heads/")
+    for entry in worktrees:
+        raw = entry.get("branch") or ""
+        entry_branch = raw.removeprefix("refs/heads/")
+        if entry_branch == stripped:
+            return f"branch:{entry_branch}"
+    return None
+
+
+def _extract_terminal_handle(payload: dict[str, Any]) -> str | None:
+    """Extract a terminal handle from an ``orca terminal create --json`` payload,
+    tolerating minor schema differences across Orca versions."""
+
+    result = payload.get("result") or {}
+    terminal = result.get("terminal") or {}
+    for key in ("handle", "terminalHandle", "id"):
+        value = terminal.get(key)
+        if isinstance(value, str) and value:
+            return value
+    for key in ("terminalHandle", "handle"):
+        value = result.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def spawn_role_terminal(worktree_selector: str, prompt: str) -> str | None:
+    """Start ``claude`` in a fresh terminal inside the given worktree, wait for it to
+    become ready, and feed it ``prompt`` as the initial user message.
+
+    Returns the terminal handle on success, or None on any failure — the caller should
+    defer and try again next tick rather than losing the PR.
+    """
+
+    ok, out = _run(
+        [
+            "orca",
+            "terminal",
+            "create",
+            "--worktree",
+            worktree_selector,
+            "--command",
+            "claude",
+            "--json",
+        ]
+    )
+    if not ok or not out.strip():
+        return None
+    try:
+        payload = json.loads(out)
+    except json.JSONDecodeError:
+        return None
+    handle = _extract_terminal_handle(payload)
+    if not handle:
+        print("!! orca terminal create returned no handle", file=sys.stderr)
+        return None
+
+    # claude has a TUI startup lag; sending the prompt too early drops characters.
+    wait_ok, _ = _run(
+        [
+            "orca",
+            "terminal",
+            "wait",
+            "--terminal",
+            handle,
+            "--for",
+            "tui-idle",
+            "--timeout-ms",
+            str(TERMINAL_READY_TIMEOUT_MS),
+        ]
+    )
+    if not wait_ok:
+        print(
+            f"!! orca terminal wait timed out for {handle}; sending anyway",
+            file=sys.stderr,
+        )
+
+    send_ok, _ = _run(
+        [
+            "orca",
+            "terminal",
+            "send",
+            "--terminal",
+            handle,
+            "--text",
+            prompt,
+            "--enter",
+        ]
+    )
+    if not send_ok:
+        return None
+    return handle
+
+
+def _write_prompt_to_disk(pr_number: int, role: str, prompt: str) -> None:
+    """Persist the exact prompt the dispatcher fed the agent, for later triage."""
+
+    try:
+        PROMPTS_DIR.mkdir(parents=True, exist_ok=True)
+        target = PROMPTS_DIR / f"pr-{pr_number}-{role}.txt"
+        target.write_text(prompt, encoding="utf-8")
+    except OSError as exc:
+        print(f"!! could not persist prompt for pr #{pr_number}: {exc}", file=sys.stderr)
+
+
+def build_pr_role_prompt(
+    role: str,
+    pr: dict[str, Any],
+    issue_number: int | None,
+) -> str | None:
+    """Compose the first-turn prompt for a Tester or Reviewer spawned onto an open PR."""
+
+    role_file = ROLES_DIR / f"{role}.md"
+    if not role_file.exists():
+        return None
+    system_prompt = role_file.read_text(encoding="utf-8")
+    labels = ", ".join(sorted(label["name"] for label in pr.get("labels", []))) or "(none)"
+    body = pr.get("body") or "(empty)"
+    issue_line = (
+        f"Originating issue: #{issue_number}"
+        if issue_number is not None
+        else "Originating issue: (unknown; branch did not match feature/issue-<n>)"
+    )
+
+    if role == "tester":
+        stage_instructions = f"""When you are finished:
+
+1. Run the project's test suite (per docs or the project's conventions). Reproduce
+   any failing test and capture what it did.
+2. If ALL tests pass:  `gh pr edit {pr['number']} --add-label {TESTED_LABEL}`, then
+   post a comment on the PR summarising the run (which suites ran, counts, and any
+   flakes seen). The dispatcher will spawn the Reviewer on the next poll tick.
+3. If ANY test fails, or you cannot run the suite:
+   `gh pr edit {pr['number']} --add-label {BLOCKED_LABEL}`, then post a comment on
+   the PR explaining what failed and what the Developer needs to fix. The dispatcher
+   will stop touching this PR; a human unblocks it.
+
+Do not push commits, do not merge, do not touch main."""
+    elif role == "reviewer":
+        stage_instructions = f"""When you are finished:
+
+1. Read the diff (`git diff dev...HEAD`) and the linked issue #{issue_number if issue_number is not None else '?'}.
+   Verify the code fulfils the spec and meets the code standard (easily readable,
+   minimalist, no premature abstraction).
+2. If you approve:  `gh pr merge {pr['number']} --squash --delete-branch`, then post
+   a short approval comment on the PR. This merges into `dev`.
+3. If you want changes:  `gh pr edit {pr['number']} --add-label {BLOCKED_LABEL}`,
+   post a review comment listing the required changes. The dispatcher will stop
+   touching this PR; a human unblocks it after the Developer addresses the feedback.
+
+You may merge into `dev` and only `dev`. You are STRICTLY FORBIDDEN from merging any
+branch into `main`."""
+    else:
+        return None
+
+    return f"""{system_prompt}
+
+---
+DISPATCH CONTEXT (injected by the Dispatcher process for the PR pipeline)
+
+Role: {role}
+{issue_line}
+PR #{pr['number']}: {pr['title']}
+Labels:  {labels}
+URL:     {pr['url']}
+Branch:  {pr.get('headRefName') or '(unknown)'}
+
+{stage_instructions}
+
+---
+PR BODY
+
+{body}
+"""
 
 
 def role_from_labels(labels: set[str]) -> tuple[str | None, str]:
@@ -412,6 +684,113 @@ def dispatch_issue(
     return True
 
 
+def dispatch_pr_stage(
+    pr: dict[str, Any],
+    role: str,
+    state: DispatchState,
+) -> str | None:
+    """Spawn ``role`` (tester or reviewer) as a fresh Claude terminal inside the
+    developer's existing worktree. Records handles in state and comments on the PR.
+    Returns the terminal handle on success, None on any failure."""
+
+    pr_number = int(pr["number"])
+    branch = pr.get("headRefName") or ""
+    issue_number = _issue_number_from_branch(branch)
+
+    worktree_selector = find_worktree_selector_for_branch(branch)
+    if worktree_selector is None:
+        print(
+            f"!! pr #{pr_number}: no Orca worktree found for branch {branch!r}; "
+            "deferring — a human may need to open one",
+            file=sys.stderr,
+        )
+        return None
+
+    prompt = build_pr_role_prompt(role, pr, issue_number)
+    if prompt is None:
+        print(
+            f"!! pr #{pr_number}: role prompt missing for {role!r} at "
+            f"~/.orca/roles/{role}.md",
+            file=sys.stderr,
+        )
+        return None
+    _write_prompt_to_disk(pr_number, role, prompt)
+
+    handle = spawn_role_terminal(worktree_selector, prompt)
+    if handle is None:
+        return None
+
+    key = str(pr_number)
+    existing = state.prs.get(key, {})
+    stage = f"{role}_dispatched"
+    updated = {
+        **existing,
+        "stage": stage,
+        "worktree_selector": worktree_selector,
+        "issue_number": issue_number,
+        f"{role}_terminal": handle,
+    }
+    state.prs[key] = updated
+    state.save()
+
+    gh_pr_comment(
+        pr_number,
+        f"Dispatched `{role}` agent into worktree `{worktree_selector}` "
+        f"(terminal `{handle}`). Waiting for the agent to add "
+        f"`{TESTED_LABEL}` or `{BLOCKED_LABEL}`.",
+    )
+    print(f"dispatched pr #{pr_number} -> {role} in {worktree_selector}")
+    return handle
+
+
+def poll_prs(state: DispatchState) -> int:
+    """One pass over open PRs to ``dev``. Advances the pipeline for each PR according
+    to labels and stored state. Returns the count of new agent spawns this tick."""
+
+    prs = gh_list_open_prs_to_dev()
+    open_numbers = {int(pr["number"]) for pr in prs}
+
+    # Drop state entries for PRs that are no longer open (merged, closed, or renamed).
+    closed = [key for key in list(state.prs) if int(key) not in open_numbers]
+    for key in closed:
+        prev = state.prs.pop(key)
+        prev_stage = prev.get("stage")
+        print(f"pr #{key} closed; previous stage was {prev_stage!r}")
+    if closed:
+        state.save()
+
+    spawns = 0
+    for pr in prs:
+        pr_number = int(pr["number"])
+        key = str(pr_number)
+        labels = {label["name"] for label in pr.get("labels", [])}
+        entry = state.prs.get(key, {})
+        stage = entry.get("stage")
+
+        if BLOCKED_LABEL in labels:
+            if stage != "blocked":
+                state.prs[key] = {**entry, "stage": "blocked"}
+                state.save()
+                print(f"pr #{pr_number} blocked (label {BLOCKED_LABEL})", file=sys.stderr)
+            continue
+
+        if stage is None:
+            # New PR — dispatch Tester.
+            if dispatch_pr_stage(pr, "tester", state):
+                spawns += 1
+            continue
+
+        if stage == "tester_dispatched" and TESTED_LABEL in labels:
+            if dispatch_pr_stage(pr, "reviewer", state):
+                spawns += 1
+            continue
+
+        # tester_dispatched without state:tested → still waiting for the Tester.
+        # reviewer_dispatched → still waiting for the Reviewer to merge or block.
+
+    return spawns
+
+
 def poll_once(config: dict[str, Any], state: DispatchState) -> int:
     """Poll gh once. Returns the count of issues dispatched on this tick."""
 
@@ -462,6 +841,7 @@ def main() -> int:
 
     if args.once:
         poll_once(config, state)
+        poll_prs(state)
         return 0
 
     print(
@@ -474,7 +854,13 @@ def main() -> int:
             if dispatched:
                 print(f"tick: dispatched {dispatched} issue(s)", flush=True)
         except Exception as exc:  # noqa: BLE001 — the loop must never die.
-            print(f"!! poll failed: {exc}", file=sys.stderr)
+            print(f"!! issue poll failed: {exc}", file=sys.stderr)
+        try:
+            spawns = poll_prs(state)
+            if spawns:
+                print(f"tick: spawned {spawns} PR-pipeline agent(s)", flush=True)
+        except Exception as exc:  # noqa: BLE001 — the loop must never die.
+            print(f"!! pr poll failed: {exc}", file=sys.stderr)
         # Sleep in 1-second slices so Ctrl+C is responsive.
         for _ in range(max(1, args.interval)):
             if _STOP:

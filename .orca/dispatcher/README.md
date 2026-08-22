@@ -37,6 +37,34 @@ this directory.
    to `circuit_breaker.max_cycles` (3). The next attempt adds the `escalated` label,
    posts `Circuit breaker tripped: 3 failed attempts.`, and stops touching the issue.
 
+## PR pipeline (Tester and Reviewer)
+
+A second poll pass on each tick walks every open PR whose base is `dev`, driving the
+Tester → Reviewer → merge pipeline automatically.
+
+1. **New PR seen** (from a `feature/issue-<n>` branch with an existing Orca worktree):
+   spawn a Claude session in that worktree as the **Tester**. Loads
+   `~/.orca/roles/tester.md`, adds a DISPATCH CONTEXT block, sends via
+   `orca terminal send`.
+2. **Tester passes** → adds label `state:tested` on the PR. Dispatcher spawns a
+   Claude session in the same worktree as the **Reviewer**.
+3. **Reviewer approves** → merges with `gh pr merge <n> --squash --delete-branch`.
+   PR closes, dispatcher drops the entry from `state.json`.
+
+Failure signal: either agent adds label `state:blocked` (test failure or
+review-requires-changes). The dispatcher records the block, stops touching the PR,
+and hands off to a human. Re-dispatching the Developer with feedback is v2 — for now
+the human either fixes the code themselves or bumps the developer worktree back into
+play manually.
+
+Deferral: a PR whose head branch has no Orca worktree (hand-opened, or worktree
+archived) is skipped on that tick and retried on the next. That gives the human a
+chance to open the worktree before the Tester spawns.
+
+Prompts sent to Tester and Reviewer are also written to
+`.orca/dispatcher/prompts/pr-<n>-<role>.txt` (gitignored) so you can inspect exactly
+what the dispatcher fed each agent when triaging.
+
 ## Prerequisites on the host
 
 - Python 3.9+ and PyYAML (`pip install pyyaml`).

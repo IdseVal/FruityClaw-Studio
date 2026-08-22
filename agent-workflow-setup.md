@@ -834,6 +834,8 @@ gh label create escalated       --description "Circuit breaker tripped; the poll
 gh label create role:developer  --description "Implementation work; loads ~/.orca/roles/developer.md"
 gh label create role:architect  --description "Design and contracts; loads ~/.orca/roles/architect.md"
 gh label create role:researcher --description "Facts about external systems; loads ~/.orca/roles/researcher.md"
+gh label create state:tested    --description "Tester passed; the dispatcher spawns Reviewer next"
+gh label create state:blocked   --description "Tester or Reviewer needs human help; the dispatcher stops touching the PR"
 ```
 
 ### The dispatcher process
@@ -872,6 +874,31 @@ desktop app):
    --base-branch dev --agent claude --prompt "<role prompt + DISPATCH CONTEXT + issue body>"`.
 8. Records the dispatch in `state.json` and comments on the issue with the worktree
    name, chosen role, pipeline and cycle count.
+
+**PR pipeline (Tester and Reviewer follow-up)**
+
+A second poll pass on the same tick walks every open PR whose base is `dev`, driving
+Tester → Reviewer → merge automatically. This is standard — not a manual step.
+
+1. **New PR seen** on a `feature/issue-<n>` branch that has an existing Orca worktree:
+   spawn a Claude session in that worktree as the Tester
+   (`orca terminal create --worktree branch:<name> --command "claude"`, then
+   `orca terminal send` the tester prompt). The Tester runs the project's test suite.
+2. **Tester adds `state:tested`** on the PR: spawn a Claude session in the same
+   worktree as the Reviewer.
+3. **Reviewer merges** with `gh pr merge <n> --squash --delete-branch`. PR closes,
+   dispatcher drops the entry from `state.json`.
+
+Failure signal: either agent adds `state:blocked` on the PR (test failure or
+review-requires-changes). The dispatcher records the block, stops touching the PR,
+and a human resolves. Re-dispatching Developer with the failure context is v2.
+
+Deferral: a PR whose head branch has no Orca worktree is skipped that tick and
+retried on the next, giving a human time to open the worktree.
+
+Prompts fed to Tester and Reviewer are written to
+`.orca/dispatcher/prompts/pr-<n>-<role>.txt` (gitignored) so you can see exactly what
+each agent was told when triaging.
 
 #### `.orca/dispatcher/dispatch.py`
 
@@ -2027,7 +2054,7 @@ plans claim, and every one of them fails the setup for everybody rather than for
 [ ] ~/.orca/roles/ on this host holds all seven role files (six agents + dispatcher.md policy) — populated ONCE per machine, never per project
 [ ] .orca/dispatch.yml names your labels, pipelines and gates
 [ ] Every agent prompt forbids merging to main; only the Reviewer may merge to dev
-[ ] gh labels created: ui seo scraper bug data trivial ready escalated role:developer role:architect role:researcher
+[ ] gh labels created: ui seo scraper bug data trivial ready escalated role:developer role:architect role:researcher state:tested state:blocked
 [ ] .orca/dispatcher/dispatch.py exists and `python .orca/dispatcher/dispatch.py --once` exits 0
 [ ] The Dispatcher process is actually running — a foreground terminal, a scheduled --once, or an Orca automation — not just present in the repo
 [ ] Only ONE dispatcher process is running against this repo (state.json is not locked between processes)

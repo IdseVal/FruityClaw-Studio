@@ -2,4 +2,5 @@ mail/__pycache__/
 .orca/dispatcher/__pycache__/
 .orca/dispatcher/state.json
 .orca/dispatcher/state.tmp
+.orca/dispatcher/prompts/
 
