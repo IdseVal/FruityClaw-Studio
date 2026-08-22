@@ -45,6 +45,7 @@ STATE_FILE = REPO_ROOT / ".orca" / "dispatcher" / "state.json"
 
 READY_LABEL = "ready"
 ESCALATED_LABEL = "escalated"
+ROLE_LABEL_PREFIX = "role:"
 DEFAULT_POLL_INTERVAL_SECONDS = 60
 SUBPROCESS_TIMEOUT_SECONDS = 120
 
@@ -169,9 +170,32 @@ def gh_comment(issue_number: int, body: str) -> None:
     _run(["gh", "issue", "comment", str(issue_number), "--body", body])
 
 
-def pipeline_for_labels(labels: set[str], config: dict[str, Any]) -> str:
-    """Return ``trivial`` iff the label set opts in AND touches no forbidden label."""
+def role_from_labels(labels: set[str]) -> tuple[str | None, str]:
+    """Return ``(role, reason)``.
 
+    ``role`` is the role name from the sole ``role:*`` label, or None when no
+    unambiguous role can be chosen. ``reason`` is a human-readable explanation used in
+    the skip comment.
+    """
+
+    role_labels = sorted(
+        label[len(ROLE_LABEL_PREFIX):]
+        for label in labels
+        if label.startswith(ROLE_LABEL_PREFIX)
+    )
+    if not role_labels:
+        return None, "no `role:*` label found"
+    if len(role_labels) > 1:
+        return None, f"multiple `role:*` labels found: {role_labels}"
+    return role_labels[0], "ok"
+
+
+def pipeline_for(role: str, labels: set[str], config: dict[str, Any]) -> str:
+    """Only the ``developer`` role opts into default/trivial pipelines. Every other
+    role is a single-agent dispatch named after the role itself."""
+
+    if role != "developer":
+        return role
     if "trivial" not in labels:
         return "default"
     forbidden = set(
@@ -184,8 +208,8 @@ def pipeline_for_labels(labels: set[str], config: dict[str, Any]) -> str:
     return "trivial"
 
 
-def skills_for_labels(labels: set[str], config: dict[str, Any]) -> list[str]:
-    """Baseline developer skills plus any earned by the issue's labels."""
+def skills_for(role: str, labels: set[str], config: dict[str, Any]) -> list[str]:
+    """Baseline skills for the chosen role plus any earned by the issue's labels."""
 
     ordered: list[str] = []
     seen: set[str] = set()
@@ -196,34 +220,28 @@ def skills_for_labels(labels: set[str], config: dict[str, Any]) -> list[str]:
                 seen.add(item)
                 ordered.append(item)
 
-    _extend(config.get("roles", {}).get("developer", {}).get("skills", []) or [])
+    _extend(config.get("roles", {}).get(role, {}).get("skills", []) or [])
     label_map = config.get("labels", {}) or {}
     for label in sorted(labels):
         _extend((label_map.get(label) or {}).get("skills", []) or [])
     return ordered
 
 
-def build_developer_prompt(
+def build_role_prompt(
+    role: str,
     issue: dict[str, Any],
     pipeline: str,
     skills: list[str],
     cycle: int,
     max_cycles: int,
-) -> str:
-    """Compose the message the Developer agent sees on first turn.
+) -> str | None:
+    """Compose the first-turn prompt for the assigned role. Returns None if the role
+    prompt file is missing on this host — the caller comments and skips."""
 
-    We inject the Developer system prompt verbatim, then a DISPATCH CONTEXT block, then
-    the issue body. The agent has everything it needs without another round trip.
-    """
-
-    developer_role = ROLES_DIR / "developer.md"
-    if not developer_role.exists():
-        raise FileNotFoundError(
-            f"Role prompt missing: {developer_role}. Roles live in ~/.orca/roles/ and "
-            "are shared across all projects; seed the directory from section 7 of "
-            "agent-workflow-setup.md on this host."
-        )
-    system_prompt = developer_role.read_text(encoding="utf-8")
+    role_file = ROLES_DIR / f"{role}.md"
+    if not role_file.exists():
+        return None
+    system_prompt = role_file.read_text(encoding="utf-8")
     labels = ", ".join(sorted(label["name"] for label in issue.get("labels", []))) or "(none)"
     skill_list = ", ".join(skills) if skills else "(baseline only)"
     body = issue.get("body") or "(empty)"
@@ -233,6 +251,7 @@ def build_developer_prompt(
 ---
 DISPATCH CONTEXT (injected by the Dispatcher process)
 
+Role:     {role}
 Pipeline: {pipeline}
 Cycle:    {cycle}/{max_cycles}
 Skills:   {skill_list}
@@ -245,8 +264,9 @@ Read `docs/CORE_DOCUMENT.md`, the relevant `docs/specs/*.md` and any ADRs before
 begin. Do only what this issue asks. When you are finished:
 
 1. Open a PR from your worktree branch into `dev` with `gh pr create`.
-2. Paste evidence into the PR body per `.orca/dispatch.yml` evidence gates
-   (counts reconciled, output sampled, cost measured — whichever apply).
+2. If your work touches data or a pipeline, paste evidence into the PR body per
+   `.orca/dispatch.yml` evidence gates (counts reconciled, output sampled, cost
+   measured — whichever apply).
 3. Post a completion comment on issue #{issue['number']}.
 
 You are STRICTLY FORBIDDEN from merging any branch into `main`. Only the Reviewer merges
@@ -267,13 +287,58 @@ def dispatch_issue(
     """Create the worktree for one issue. Returns True iff a worktree was created.
 
     Increments the cycle count first; if the increment would exceed ``max_cycles`` the
-    breaker trips and no worktree is created.
+    breaker trips and no worktree is created. If no unambiguous ``role:*`` label is
+    present the poller comments once and records ``role_missing`` in state so the same
+    comment is not re-posted on every tick.
     """
 
     number = int(issue["number"])
     key = str(number)
     existing = state.dispatched.get(key, {})
     max_cycles = int(config.get("circuit_breaker", {}).get("max_cycles", 3))
+    labels = {label["name"] for label in issue.get("labels", [])}
+
+    role, role_reason = role_from_labels(labels)
+    if role is None:
+        prev_labels = set(existing.get("labels", []))
+        if existing.get("role_missing") and prev_labels == labels:
+            # Same broken label set as before; do not re-comment.
+            return False
+        msg = (
+            f"Cannot dispatch: {role_reason}. Add exactly one `role:*` label "
+            "(e.g. `role:developer`, `role:architect`, `role:researcher`) and remove "
+            "the `escalated` label if it is present."
+        )
+        gh_comment(number, msg)
+        state.dispatched[key] = {
+            **existing,
+            "role_missing": True,
+            "labels": sorted(labels),
+        }
+        state.save()
+        print(f"skipped #{number}: {role_reason}", file=sys.stderr)
+        return False
+
+    role_file = ROLES_DIR / f"{role}.md"
+    if not role_file.exists():
+        prev_labels = set(existing.get("labels", []))
+        if existing.get("role_missing") and prev_labels == labels:
+            return False
+        msg = (
+            f"Cannot dispatch: role prompt `~/.orca/roles/{role}.md` is missing on "
+            "the dispatcher host. Seed the host roles directory from section 7 of "
+            "agent-workflow-setup.md."
+        )
+        gh_comment(number, msg)
+        state.dispatched[key] = {
+            **existing,
+            "role_missing": True,
+            "labels": sorted(labels),
+        }
+        state.save()
+        print(f"skipped #{number}: role prompt missing for {role!r}", file=sys.stderr)
+        return False
+
     next_cycle = int(existing.get("cycle", 0)) + 1
 
     if next_cycle > max_cycles:
@@ -286,10 +351,10 @@ def dispatch_issue(
         print(f"escalated #{number}: {summary}", file=sys.stderr)
         return False
 
-    labels = {label["name"] for label in issue.get("labels", [])}
-    pipeline = pipeline_for_labels(labels, config)
-    skills = skills_for_labels(labels, config)
-    prompt = build_developer_prompt(issue, pipeline, skills, next_cycle, max_cycles)
+    pipeline = pipeline_for(role, labels, config)
+    skills = skills_for(role, labels, config)
+    prompt = build_role_prompt(role, issue, pipeline, skills, next_cycle, max_cycles)
+    assert prompt is not None  # guaranteed by the role_file.exists() check above.
 
     worktree_name = f"feature/issue-{number}"
     ok, out = _run(
@@ -328,6 +393,7 @@ def dispatch_issue(
 
     state.dispatched[key] = {
         "cycle": next_cycle,
+        "role": role,
         "worktree_name": worktree_name,
         "worktree_id": worktree_id,
         "pipeline": pipeline,
@@ -336,10 +402,13 @@ def dispatch_issue(
 
     gh_comment(
         number,
-        f"Dispatched to worktree `{worktree_name}` "
+        f"Dispatched to worktree `{worktree_name}` as `{role}` "
         f"(pipeline: {pipeline}, cycle {next_cycle}/{max_cycles}).",
     )
-    print(f"dispatched #{number} -> {worktree_name} (cycle {next_cycle}/{max_cycles})")
+    print(
+        f"dispatched #{number} -> {worktree_name} as {role} "
+        f"(cycle {next_cycle}/{max_cycles})"
+    )
     return True
 
 
@@ -352,9 +421,20 @@ def poll_once(config: dict[str, Any], state: DispatchState) -> int:
         if ESCALATED_LABEL in labels:
             continue
         key = str(int(issue["number"]))
-        if key in state.dispatched and not state.dispatched[key].get("escalated"):
-            # Already dispatched and not yet failed enough to re-enter the queue.
-            continue
+        existing = state.dispatched.get(key)
+        if existing:
+            if existing.get("escalated"):
+                continue
+            if existing.get("role_missing"):
+                # dispatch_issue re-evaluates when labels have changed; call it and
+                # let it decide whether to comment/skip or fall through to dispatch.
+                if dispatch_issue(issue, config, state):
+                    dispatched_now += 1
+                continue
+            if existing.get("cycle", 0) > 0:
+                # Already dispatched at least once; skip until the state entry is
+                # cleared (documented in .orca/dispatcher/README.md).
+                continue
         if dispatch_issue(issue, config, state):
             dispatched_now += 1
     return dispatched_now

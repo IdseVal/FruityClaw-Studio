@@ -15,15 +15,24 @@ this directory.
 
 1. Calls `gh issue list --state open --label ready --json …` every `--interval` seconds.
 2. Filters out issues already in `state.json` and issues carrying the `escalated` label.
-3. For each remaining issue: computes the pipeline (`trivial` if labelled `trivial` and
-   free of `ui`/`scraper`/`data`; else `default`), computes the skills earned by
-   labels per `../dispatch.yml`, and builds a Developer prompt from
-   `~/.orca/roles/developer.md` + issue body + dispatch context.
-4. `orca worktree create --repo path:<repo> --name feature/issue-<n> --issue <n>
-   --base-branch dev --agent claude --prompt "<built prompt>"`.
-5. Records the dispatch in `state.json` and comments on the issue with the worktree name
-   and cycle count.
-6. If an issue is re-labelled `ready` after a failed round (its `state.json` entry is
+3. **Reads the `role:*` label to pick the role.** Every ready issue must carry
+   *exactly one* `role:*` label (`role:developer`, `role:architect`,
+   `role:researcher`, etc.). Zero or multiple → the poller comments once
+   (`Cannot dispatch: no role:* label found` / `multiple role:* labels found`),
+   records `role_missing` in state, and skips. When the labels change the issue is
+   re-evaluated without re-commenting.
+4. Loads `~/.orca/roles/<role>.md` as the system prompt. Missing → comments once and
+   skips.
+5. Computes the pipeline. `role:developer` gets `default` or `trivial` (per the
+   `trivial` label and `pipelines.trivial.forbid_labels`). Every other role is a
+   single-agent dispatch named after the role.
+6. Computes the skills: baseline for the chosen role from `roles.<role>.skills` in
+   `../dispatch.yml`, plus any earned by other labels per `labels.*.skills`.
+7. `orca worktree create --repo path:<repo> --name feature/issue-<n> --issue <n>
+   --base-branch dev --agent claude --prompt "<role prompt + DISPATCH CONTEXT + issue body>"`.
+8. Records the dispatch in `state.json` and comments on the issue with the worktree
+   name, role, pipeline and cycle count.
+9. If an issue is re-labelled `ready` after a failed round (its `state.json` entry is
    removed by hand, or its cycle count is bumped), the poller dispatches it again — up
    to `circuit_breaker.max_cycles` (3). The next attempt adds the `escalated` label,
    posts `Circuit breaker tripped: 3 failed attempts.`, and stops touching the issue.
@@ -33,9 +42,10 @@ this directory.
 - Python 3.9+ and PyYAML (`pip install pyyaml`).
 - `gh` authenticated for this repo (`gh auth status`).
 - `orca` on PATH, and Orca open (`orca status` reports `runtimeReachable: true`).
-- Labels on the GitHub repo: `ready`, `escalated`, plus the routing labels from
-  section 8 of `agent-workflow-setup.md` (`ui`, `seo`, `scraper`, `bug`, `data`,
-  `trivial`).
+- Labels on the GitHub repo: `ready`, `escalated`, one or more `role:*` labels
+  (`role:developer`, `role:architect`, `role:researcher`, …), plus the routing
+  labels from section 8 of `agent-workflow-setup.md` (`ui`, `seo`, `scraper`, `bug`,
+  `data`, `trivial`).
 
 ## Running it
 
