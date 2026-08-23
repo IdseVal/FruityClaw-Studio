@@ -1,4 +1,4 @@
-# ADR-002 — The Project data model
+# ADR-005 — The Project data model
 
 - **Status:** Proposed. Freezes on merge to `dev`.
 - **Date:** 2026-08-23

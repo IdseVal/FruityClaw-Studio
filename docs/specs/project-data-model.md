@@ -1,7 +1,7 @@
 # Spec — The Project data model
 
 - **Status:** Frozen contract. Changes require a superseding ADR.
-- **Authority:** [`ADR-002`](../adrs/ADR-002-project-data-model.md) decides; this document states the contract.
+- **Authority:** [`ADR-005`](../adrs/ADR-005-project-data-model.md) decides; this document states the contract.
 - **Derived from:** `docs/CORE_DOCUMENT.md` §3.7, §3.8, §3.9, §5, §6.3, §8.1, §9.
 - **Issue:** #5
 
@@ -159,7 +159,7 @@ Turns Events into audio. The **only** producer of sound in the model.
 **Consequence worth knowing:** with `Sampler` as the only MVP kind, every sound in the MVP comes
 from a Sample. That is consistent with §3.5, which lists stock Samples and no synthesiser, and with
 Appendix A.2, which supplies pitched acoustic content for the piano roll. It is a real product
-implication and is flagged in ADR-002's open items.
+implication and is flagged in ADR-005's open items.
 
 ### 3.4 Pattern
 
@@ -240,7 +240,7 @@ One appearance of a Pattern on a Track.
 
 **Everything on a Track is a Placement of a Pattern.** There is no second placement type for audio.
 A recorded take reaches the timeline as: Sample → `Sampler` Instrument → Part with one Event →
-Pattern → Placement. The cost and the reasoning are in ADR-002.
+Pattern → Placement. The cost and the reasoning are in ADR-005.
 
 ### 3.10 Effect
 
