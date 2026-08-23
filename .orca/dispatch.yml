@@ -1,12 +1,31 @@
-version: 1
+version: 2
 
 branches:
   base: dev
-  protected: [main]          # no agent may merge into these
-  worktree_prefix: feature/
+  protected: [main]          # no agent may merge into these; the human opens dev -> main
 
-# Role prompts are HOST-LEVEL at ~/.orca/roles/ and shared across every project.
-# The dispatcher process reads them from there; nothing here names a repo-relative path.
+# The dispatcher process (.orca/dispatcher/dispatch.py) reads this block.
+dispatcher:
+  agent: claude                      # Orca agent id used for every spawn
+  poll_interval_seconds: 60
+  max_active_issues: 4               # issues with a live worktree at once; protects quota and Orca
+  idle_minutes_before_nudge: 15      # agent silent this long without a PR/label -> one nudge
+  idle_minutes_after_nudge: 15       # still silent -> label needs-human
+  cleanup_worktrees_on_merge: true   # remove the developer worktree when its PR merges into dev
+  docs_only:                         # a PR touching only these is auto state:tested (tester skipped)
+    prefixes: [docs/]
+    suffixes: [.md, .txt]
+  notify:
+    github_mention: "@IdseVal"       # mentioned on GitHub when an agent needs the human; GitHub e-mails mentions
+    # SMTP_* environment variables (same names as the daily digest) add an e-mail on top, if set.
+
+gates:
+  core_document:                     # nothing is dispatched until the PO's core document is on `dev`
+    path: docs/CORE_DOCUMENT.md
+    empty_marker: "Status: EMPTY"
+
+# Role prompts are HOST-LEVEL at ~/.orca/roles/<role>.md and shared across every project.
+# This block only lists the baseline skills each role is told it has.
 roles:
   po-analyst:
     skills: [handoff, grill-with-docs, domain-modeling]
@@ -15,14 +34,13 @@ roles:
   researcher:
     skills: [handoff, just-scrape, diagnosing-bugs]
   developer:
-    skills: [handoff]        # baseline; labels add to it
+    skills: [handoff]                # baseline; labels add to it
   tester:
     skills: [handoff, tdd, webapp-testing]
   reviewer:
     skills: [handoff, code-review]
 
-# A label is a claim about the work. It earns the skills that work needs and no others:
-# loading the whole design stack for a typo is how small work becomes too expensive to do.
+# A label is a claim about the work. It earns the skills that work needs and no others.
 labels:
   ui:
     skills: [frontend-design, web-design-guidelines, high-end-visual-design]
@@ -38,22 +56,14 @@ labels:
 pipelines:
   default:
     stages: [developer, tester, reviewer]
-
-  # `trivial` skips the TESTER, never the reviewer. For a typo, a comment, a version bump or
-  # a doc edit a test author has nothing to write, and every line is still read before it
-  # lands. The REVIEWER refuses the label when the change turns out to touch behaviour: it is
-  # a request, not a permission.
+  # `trivial` skips the TESTER, never the reviewer. The Reviewer refuses the label when the
+  # change turns out to touch behaviour: it is a request, not a permission.
   trivial:
     stages: [developer, reviewer]
     forbid_labels: [ui, scraper, data]
 
 circuit_breaker:
-  max_cycles: 3
-  on_trip:
-    freeze_worktree: true
-    halt_automation: true
-    assign_to: human
-    attach: [diff, test_output, agent_transcript_tail]
+  max_cycles: 3                      # dispatches + send-backs per issue before `escalated`
 
 evidence_gates:
   - id: counts-reconciled
