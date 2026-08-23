@@ -23,4 +23,12 @@ decision 2 and end up somewhere the ADR argues against, they belong together.
 | ADR | Issue | Title | Status |
 | --- | ----- | ----- | ------ |
 | [ADR-001](ADR-001-stock-effect-implementations.md) | #1 | Stock Effect implementations for the MVP | Proposed |
+| [ADR-0002](ADR-0002-stock-sample-libraries.md) | #2 | Stock Sample libraries for drums and guitars | Proposed |
 | [ADR-004](ADR-004-llm-provider-for-the-assistant.md) | #4 | LLM provider support for the Assistant | Proposed |
+| [ADR-005](ADR-005-project-data-model.md) | #5 | The Project data model | Proposed |
+| [ADR-006](ADR-006-function-surface-and-function-file.md) | #6 | The Function surface and Function file generation | Proposed |
+| [ADR-007](ADR-007-delta-history.md) | #7 | Linear delta history for undo and redo | Proposed |
+| [ADR-008](ADR-008-technology-stack-and-audio-engine.md) | #8 | Technology stack and audio engine | Proposed |
+
+(`ADR-0002` predates this README's naming rule and keeps its merged filename; the number
+still reads as issue #2 and collides with nothing.)
