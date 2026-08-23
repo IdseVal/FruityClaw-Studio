@@ -1,8 +1,9 @@
-# ADR 0001 — The handpicked music-generation model list
+# ADR-003 — The handpicked music-generation model list
 
 - **Status:** Proposed
 - **Date:** 2026-08-23
-- **Closes:** Open question 3 (`docs/CORE_DOCUMENT.md` §6.4, §6.5, §10) — issue #3
+- **Issue:** #3 — Which models go on the handpicked music-generation list
+- **Closes:** Open question 3 (`docs/CORE_DOCUMENT.md` §6.4, §6.5, §10)
 - **List owner:** Idse Val (project owner)
 - **Review cadence:** Quarterly, plus event-driven (see [Curation commitment](#curation-commitment))
 - **Deciders:** Project owner
@@ -34,12 +35,9 @@ Three constraints bound it:
 Per B.3, this ADR covers the **audio model only**. AI-generated Patterns come from the LLM emitting
 note data through a Function; no audio model is involved.
 
-### Scope note — a dependency worth stating
+### Scope note
 
-The core document sections this ADR answers to are **not present on `dev`**. `docs/CORE_DOCUMENT.md`
-on `dev` is the 15-line empty scaffold; the populated 642-line version exists only on the unmerged
-branch `DeKnecht/onboarding`. All section references here are to that branch's content. **This ADR
-does not become coherent in the repo until that branch merges.** Flagged, not worked around.
+All § references are to `docs/CORE_DOCUMENT.md` as merged on `dev`.
 
 ---
 
