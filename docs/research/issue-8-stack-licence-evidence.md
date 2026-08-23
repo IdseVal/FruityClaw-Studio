@@ -1,6 +1,6 @@
 # Issue #8 — Evidence log: technology stack and audio engine
 
-Primary-source verification behind [`ADR-002`](../adrs/ADR-002-technology-stack-and-audio-engine.md).
+Primary-source verification behind [`ADR-008`](../adrs/ADR-008-technology-stack-and-audio-engine.md).
 Checked 2026-08-23. Nothing in this file is a decision; every row is something that was looked up
 rather than remembered.
 
@@ -41,7 +41,7 @@ to keep calling the result GPLv3:
 > will apply to the combination as such."
 > — GNU GPL v3, section 13
 
-Two consequences, both recorded in ADR-002:
+Two consequences, both recorded in ADR-008:
 
 1. The **stated licence** would have to become AGPLv3. Core document 3.2 says GPLv3, and 3.2 is an
    owner decision. A spec may not contradict the core document silently.
@@ -142,7 +142,7 @@ August 2026, though daily snapshots continue (most recent seen: 2026-08-17)
 ([releases](https://github.com/PortAudio/portaudio/releases),
 [v19.8 milestone](https://github.com/PortAudio/portaudio/milestone/10)).
 
-Mitigations are in ADR-002. The short version: pin a commit rather than a tag — which is what
+Mitigations are in ADR-008. The short version: pin a commit rather than a tag — which is what
 Audacity and Mixxx do — and keep the backend behind a seam that has a second qualified adapter
 ready.
 
@@ -178,7 +178,7 @@ Confirmed by the pattern of release announcements: Qt 6.8.6, 6.8.7 and 6.8.8 wer
 reached **Qt 6.11** ([Qt Releases](https://doc.qt.io/qt-6/qt-releases.html)).
 
 Consequence: an open-source project that pins "Qt 6.8 LTS" for stability gets the *opposite* — a
-branch whose fixes it cannot receive. ADR-002 therefore tracks the feature stream.
+branch whose fixes it cannot receive. ADR-008 therefore tracks the feature stream.
 
 ---
 
@@ -226,7 +226,7 @@ format, DMG included, and regardless of whether the project is open source
 [Apple — safely open apps](https://support.apple.com/en-us/102445)).
 
 Core document 3.3 makes GitHub the distribution channel. Nothing about GitHub-first distribution
-removes this requirement, so it is raised in ADR-002 as an owner decision with a recurring cost,
+removes this requirement, so it is raised in ADR-008 as an owner decision with a recurring cost,
 not resolved here.
 
 ---

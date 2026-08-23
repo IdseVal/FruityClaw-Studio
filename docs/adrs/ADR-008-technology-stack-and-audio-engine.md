@@ -1,4 +1,4 @@
-# ADR-002 — Technology stack and audio engine
+# ADR-008 — Technology stack and audio engine
 
 - **Status:** Proposed — becomes **Frozen** on merge to `dev`
 - **Date:** 2026-08-23

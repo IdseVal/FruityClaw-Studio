@@ -157,7 +157,7 @@ A user may commercially release music made with any of the six.
    option, the stated licence is wrong — it must be AGPLv3, or JUCE needs a commercial licence.
    This ADR does not decide the project licence. Flagged for the architecture track.
 
-   > **Resolved by [ADR-002](ADR-002-technology-stack-and-audio-engine.md), 2026-08-23.** The
+   > **Resolved by [ADR-008](ADR-008-technology-stack-and-audio-engine.md), 2026-08-23.** The
    > architecture track took the other branch: the project licence stays GPLv3 as core document 3.2
    > states, and **JUCE is not used**. The selected stack contains no AGPL-licensed dependency, so
    > the Studio ships as a plain GPLv3 work. The concern raised here was correct and decided the

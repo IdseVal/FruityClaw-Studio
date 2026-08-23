@@ -1,7 +1,7 @@
 # Spec — Repository layout and frozen seams
 
 - **Status:** Proposed — becomes **Frozen** on merge to `dev`
-- **Derives from:** [`ADR-002`](../adrs/ADR-002-technology-stack-and-audio-engine.md), core document sections 3.1, 3.6, 3.7, 3.8, 3.9, 5, 8.1, 9
+- **Derives from:** [`ADR-008`](../adrs/ADR-008-technology-stack-and-audio-engine.md), core document sections 3.1, 3.6, 3.7, 3.8, 3.9, 5, 8.1, 9
 - **Issue:** #8
 - **Vocabulary:** domain terms are core document section 5 and are binding. Architecture terms —
   *module, interface, seam, adapter, depth* — are used in the sense of the `codebase-design` skill
@@ -120,7 +120,7 @@ public:
 };
 ```
 
-**Adapters:** `PortAudioDevice` today. `RtAudioDevice` is pre-qualified in ADR-002 as the second
+**Adapters:** `PortAudioDevice` today. `RtAudioDevice` is pre-qualified in ADR-008 as the second
 adapter, and a native per-platform adapter remains possible. Two viable adapters is what makes this
 a real seam rather than a hypothetical one.
 
@@ -136,7 +136,7 @@ in.
 
 **The single interface for anything that produces or transforms audio.** Stock Effects,
 Instruments, and — post-MVP — hosted third-party Plugins are all adapters over it. This is the seam
-that makes ADR-002's "Plugin hosting without a rewrite" claim checkable.
+that makes ADR-008's "Plugin hosting without a rewrite" claim checkable.
 
 ```cpp
 struct ParameterDescriptor {
@@ -273,7 +273,7 @@ contract. If one of these seams turns out to be wrong:
 
 1. **Stop** the work that depends on it.
 2. Say so in the issue, naming what is wrong and which worktrees are affected.
-3. Change it deliberately, in a new ADR that supersedes the relevant part of ADR-002.
+3. Change it deliberately, in a new ADR that supersedes the relevant part of ADR-008.
 
 Never widen an interface to unblock a single caller. That is how an interface becomes the union of
 every caller's convenience, and it is the failure mode this document exists to prevent.
