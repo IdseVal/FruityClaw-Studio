@@ -1,8 +1,8 @@
-# ADR-0001 — LLM provider support for the Assistant
+# ADR-004 — LLM provider support for the Assistant
 
-- **Status:** Proposed. Awaits the owner's acceptance — this closes open question 4 of
+- **Status:** Proposed. Awaits the owner's acceptance — it *would* close open question 4 of
   `docs/CORE_DOCUMENT.md` §7, which the owner delegated to research but did not delegate
-  the final pick of.
+  the final pick of. Until then §7 and §10 row 4 stay open and point here.
 - **Date:** 2026-08-23
 - **Issue:** #4
 - **Decider:** project owner (Idse Val)
@@ -226,19 +226,28 @@ explicit warning — but that is a different decision, and it belongs to whoever
 
 ---
 
-## Follow-up: this ADR cannot yet be reflected in the core document
+## Follow-up: how this ADR meets the core document
 
-`docs/CORE_DOCUMENT.md` on `dev` is still the **empty stub**. The populated document — the
-one this ADR cites throughout — exists only on the unmerged branch `DeKnecht/onboarding`
-(commit `e58d207`, "Populate core document from owner interview").
+The populated `docs/CORE_DOCUMENT.md` (642 lines) is on `dev` and is in this branch as of
+merge `971933b`. All citations above were checked against it there. An earlier draft of this
+section said the document was still an empty stub and that the real one lived only on the
+unmerged branch `DeKnecht/onboarding`; that was true when it was written and is no longer.
 
-Nothing was edited in the stub, because writing into a file that is about to be replaced
-wholesale would either be lost or cause a conflict. When `DeKnecht/onboarding` lands on
-`dev`, three edits are owed, and they are small:
+Three edits are owed to the core document. **One is made in this PR; two are not, and the
+difference is who owns the answer.**
 
-1. **§7** — replace `**OPEN — Idse.** Which specific LLM providers are supported.` with the
-   decision and a link to this ADR.
-2. **§10, row 4** — change the disposition from "Research Issue" to "Decided — ADR-0001".
-3. **Appendix B.4** — keep the strict-tool-use finding, and add the qualification this
-   research produced: strict mode does not support numeric constraints, so §3.8 is enforced
-   by the API *and* by a local validator, not by the API alone.
+1. **Appendix B.4 — corrected here.** B.4 stated flatly that `strict: true` *"guarantees the
+   returned arguments validate exactly against the schema."* Finding 2 shows that is
+   over-stated for bounded integers, which is nearly every Function argument in this domain.
+   That is a factual correction about the API — true whichever provider is picked, and not
+   the owner's to make — and `docs/adrs/README.md` forbids an ADR contradicting the core document
+   silently. The strict-tool-use finding is kept; the numeric-constraints qualification is
+   added beside it.
+
+2. **§7 — pointer added, question left OPEN.** "Which specific LLM providers are supported"
+   now points here as **Proposed**. It is not closed: this ADR's status is Proposed and the
+   pick is the owner's.
+
+3. **§10 row 4 — pointer added, disposition unchanged.** The row stays a **Research Issue**
+   for the same reason. It becomes "Decided" when the owner accepts this ADR, not when this
+   PR merges.

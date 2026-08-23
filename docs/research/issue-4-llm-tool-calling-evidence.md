@@ -2,7 +2,7 @@
 
 Researcher pass for open question 4 of `docs/CORE_DOCUMENT.md` §7.
 Gathered 2026-08-23. The decision drawn from this log lives in
-[`docs/adr/0001-llm-provider-for-the-assistant.md`](../adr/0001-llm-provider-for-the-assistant.md).
+[`docs/adrs/ADR-004-llm-provider-for-the-assistant.md`](../adrs/ADR-004-llm-provider-for-the-assistant.md).
 
 This file is the raw material. It separates what was **observed** from what a vendor
 **states**, and records what could not be established at all.

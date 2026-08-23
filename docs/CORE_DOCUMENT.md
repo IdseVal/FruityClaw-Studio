@@ -350,7 +350,7 @@ and each entry should state its rights position — not merely its name.
 - **Third-party Plugin formats** (post-MVP).
 - **GitHub** as the distribution channel.
 
-**OPEN — Idse.** Which specific LLM providers are supported.
+**OPEN — Idse.** Which specific LLM providers are supported. Proposed — see [ADR-004](adrs/ADR-004-llm-provider-for-the-assistant.md); the pick awaits the owner's acceptance.
 
 ---
 
@@ -461,7 +461,7 @@ delegated to research rather than answering from the chair — a legitimate clos
 | 1 | Which open-source implementation for each of the six stock Effects?   | 3.4     | Research Issue |
 | 2 | Which CC0 Sample libraries are bundled (drums, guitars)?              | 6.5     | Research Issue |
 | 3 | Which models go on the handpicked music-generation list?              | 6.4     | Research Issue |
-| 4 | Which LLM provider(s) are supported?                                  | 7       | Research Issue |
+| 4 | Which LLM provider(s) are supported?                                  | 7       | Research Issue — Proposed, see [ADR-004](adrs/ADR-004-llm-provider-for-the-assistant.md) |
 
 Shortlists and a suggested pick for each are in Appendix B. **None of the four blocks the MVP's
 shape** — each is a substitution inside a decided structure, not a change to it.
@@ -584,17 +584,29 @@ and they turn out to need entirely different machinery.
 The relevant finding is a capability match rather than a vendor comparison.
 
 **The Claude API supports strict tool use** — setting `strict: true` on a tool definition, with
-`additionalProperties: false` and `required` on the schema, **guarantees** the returned arguments
-validate exactly against the schema. Current models: Claude Opus 5, Sonnet 5, Haiku 4.5.
+`additionalProperties: false` and `required` on the schema, constrains sampling so the returned
+tool name and arguments validate against the schema. Current models: Claude Opus 5, Sonnet 5,
+Haiku 4.5.
 
-This is a direct mechanical match for section 3.8's requirement that Functions be *hard bound* —
-"a mutation call that does only that, without otherwise touching the datastructure or pattern."
-Schema-level guarantees turn that requirement from a convention the Assistant is asked to respect
-into a constraint the API enforces.
+**Qualification — research for open question 4, 2026-08-23.** The guarantee does not reach numeric
+or length constraints. Strict mode does not support `minimum`, `maximum`, `multipleOf`, `minLength`
+or `maxLength`, and supports array `minItems` only for the values 0 and 1. Nearly every Function
+argument in this domain is a bounded integer — MIDI note 0–127, velocity 0–127, step index, bar
+number, Track index, tempo — so a schema-valid call can still carry an out-of-range value. That
+particular gap is Anthropic's: OpenAI's strict mode does carry numeric bounds, but it degrades
+silently to non-strict on an incompatible schema, so **no provider's API satisfies section 9.2 on
+its own**. Section 3.8 is therefore enforced by the API **and** by a local validator at the dispatch
+boundary, not by the API alone. Evidence:
+[`docs/research/issue-4-llm-tool-calling-evidence.md`](research/issue-4-llm-tool-calling-evidence.md).
+
+This is still a direct mechanical match for section 3.8's requirement that Functions be *hard bound*
+— "a mutation call that does only that, without otherwise touching the datastructure or pattern."
+Schema-level guarantees turn the *shape* of that requirement from a convention the Assistant is
+asked to respect into a constraint the API enforces. The *range* half stays with the validator.
 
 **OPEN — Idse.** Whether to support one provider or several. Supporting several means the weakest
 provider's tool-calling guarantees set the floor for what the Studio can promise about Function
-behaviour.
+behaviour. Proposed — see [ADR-004](adrs/ADR-004-llm-provider-for-the-assistant.md).
 
 ---
 
