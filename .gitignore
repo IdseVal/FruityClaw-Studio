@@ -4,3 +4,4 @@ mail/__pycache__/
 .orca/dispatcher/state.tmp
 .orca/dispatcher/prompts/
 
+.just-scrape/
