@@ -1,4 +1,4 @@
-# ADR-002 — The Function surface and Function file generation
+# ADR-006 — The Function surface and Function file generation
 
 - **Status:** Proposed — frozen contract on merge, pending owner ratification of the items in *Open items*
 - **Date:** 2026-08-23
@@ -212,8 +212,8 @@ each is `mutate_project(json)` smuggled through a parameter.
   anything an Assistant Delta created; `generative_output` (§6.2, the licence caveat) only to
   generative-model output. An Assistant-built drum lane is AI-authored but is not model-generated
   audio, and must not carry the licence warning.
-- **`Channel` is load-bearing and is not in the §5 vocabulary.** Eight Functions name it. See *Open
-  items* 1.
+- **`Channel` and `Clip` are load-bearing and neither is in the §5 vocabulary.** Eight Functions
+  name a Channel; four name a Clip. See *Open items* 1.
 - **43 Functions is a lot of schema to emit per request.** Deliberate — it is what §3.8 asks for —
   but it is a real token cost per turn, and one worth measuring once #4 picks a provider.
 - Six issues acquire obligations (spec §8). #5 in particular must make the `MusicalContent` split
@@ -223,11 +223,12 @@ each is `mutate_project(json)` smuggled through a parameter.
 
 ## Open items — require the project owner
 
-1. **`set_channel_instrument` vs `change_instrument`, and `Channel` as vocabulary.** §3.8's worked
-   example is called `change_instrument`. This spec renames it for grammar consistency (spec §2.1)
-   and because its object is a **Channel** — a term §5's *binding* vocabulary does not define, while
-   eight Functions depend on it. Confirm the rename and add `Channel` to §5, or the surface names
-   something the binding vocabulary does not.
+1. **`set_channel_instrument` vs `change_instrument`, and the two missing vocabulary terms.** §3.8's
+   worked example is called `change_instrument`. This spec renames it for grammar consistency (spec
+   §2.1) and because its object is a **Channel** — a term §5's *binding* vocabulary does not define,
+   while eight Functions depend on it. **Clip** has the same problem: four Arrangement Functions name
+   one and §5 does not define it either. Confirm the rename and add both `Channel` and `Clip` to §5,
+   or the surface names two things the binding vocabulary does not.
 2. **The Selector decision (D4) is the one place this design answers a question §8.4 left open.**
    The owner should see the trade rather than inherit it: Selectors keep §8.4 literally true and
    make the round-7 guarantee real, at the cost of the Assistant occasionally being unable to tell

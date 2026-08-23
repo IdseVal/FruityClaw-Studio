@@ -3,7 +3,7 @@
 - **Status:** Frozen contract, pending owner ratification of the two items in *Open items*.
 - **Date:** 2026-08-23
 - **Issue:** #6
-- **Decision record:** [ADR-002](../adrs/ADR-002-function-surface-and-function-file.md)
+- **Decision record:** [ADR-006](../adrs/ADR-006-function-surface-and-function-file.md)
 - **Derived from:** `docs/CORE_DOCUMENT.md` §3.8, §3.10, §4, §5, §8.4, §9
 
 This spec defines what the Assistant may do, the shape of the instruments it does it with, and
@@ -190,7 +190,7 @@ wire, and it is reached only from `Turn2Rework`.
 Every Rework Function is a hole in the privacy floor of §8.4. The MVP has **three**, and this is a
 budget, not a coincidence.
 
-**Governance rule:** adding a Rework Function requires an amendment to ADR-002. Adding a Directive
+**Governance rule:** adding a Rework Function requires an amendment to ADR-006. Adding a Directive
 Function does not. The asymmetry is deliberate — Directive breadth is the point of §3.8, Rework
 breadth is a cost.
 
@@ -219,7 +219,7 @@ FunctionDescriptor {
   name:        FunctionName,
   class:       Directive | Rework,
   audience:    { assistant: bool, subagents: [SubagentKind] },
-  requires:    [Capability],       // e.g. GenerationModelConfigured
+  requires:    [Capability],       // e.g. MusicGenerationEnabled
   schema:      ClosedSchema,
   instruction: str,                // the §8.4 "instruction appended by the selected Function"
   effect:      str,                // the single thing it does — rendered in the switchboard
@@ -409,6 +409,14 @@ Both are absent from the Function file entirely until the user configures genera
 builder filter #2, not a runtime refusal — on a default install the Assistant is not aware these
 exist.
 
+**The capability is `MusicGenerationEnabled` — the §6.4 opt-in — not the presence of a generation
+model.** `generate_sample` genuinely needs the configured model; `generate_pattern` does not, because
+an AI Pattern is note data emitted by the LLM itself (Appendix B.3), and no audio model is involved.
+Both are still gated on the same capability: §6.4 turns *music generation* off by default, and a
+Pattern composed by the model is music generation whichever component produces it. The capability is
+named for the user's act rather than for a model, so it does not claim a prerequisite
+`generate_pattern` does not have.
+
 | Function | Class | Single effect | Locally does not touch |
 |---|---|---|---|
 | `generate_pattern` | **D** | Fills one Pattern with note or step events generated from the user's prompt | Sends **no Project content** — the model composes from the prompt alone (Appendix B.3: AI **Patterns** come from the LLM, not an audio model). Does not place the Pattern, choose an Instrument, or touch any other Pattern |
@@ -570,12 +578,14 @@ against them.
 
 ## 9. Open items — require the project owner
 
-1. **`set_channel_instrument` vs `change_instrument`.** §3.8 names the owner's example
-   `change_instrument`. This spec calls it `set_channel_instrument` for consistency with the naming
-   grammar (§2.1) and because the object it acts on is a **Channel**, which §5's binding vocabulary
-   does not yet contain. Same Function, different label. Confirm the rename, and confirm **Channel**
-   as a §5 vocabulary term — otherwise `set_channel_instrument` names something the binding
-   vocabulary does not define. This is the one place this spec touches §5.
+1. **`set_channel_instrument` vs `change_instrument`, and two terms §5 does not define.** §3.8 names
+   the owner's example `change_instrument`. This spec calls it `set_channel_instrument` for
+   consistency with the naming grammar (§2.1) and because the object it acts on is a **Channel**,
+   which §5's binding vocabulary does not yet contain. Same Function, different label. **Clip** is in
+   the same position: §5.7's `place_clip`, `move_clip`, `resize_clip` and `remove_clip` all name one,
+   and §5 defines Arrangement and Track but not the object placed on a Track. Confirm the rename, and
+   confirm **Channel** and **Clip** as §5 vocabulary terms — otherwise those Functions name things the
+   binding vocabulary does not define. This is the one place this spec touches §5.
 2. **Selectors resolve §8.4's silence, and the owner should see how.** §8.4 says what leaves the
    machine is "the user's prompt, and an instruction appended by the selected Function". It does not
    say how the model names *which* Pattern. The obvious answer — send a list of the Project's
