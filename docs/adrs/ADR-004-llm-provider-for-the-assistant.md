@@ -132,7 +132,7 @@ against a stated standard rather than a preference.
   target dialect. Bounded integers cannot be expressed as `minimum`/`maximum`; the choice is
   an enum enumerating the range or a plain `integer` plus the local validator. Prefer the
   plain type and let the validator own bounds, until the enum approach is measured — see
-  the verification task.
+  the verification task. *(Since decided: see the cross-check below.)*
 - **Issue #16 (Assistant panel and Function execution).** The validator is the single
   dispatch gate. Nothing calls a Function except through it.
 - **Issue #17 (Function switchboard).** Rebuilding the Function file on a toggle plausibly
@@ -144,6 +144,30 @@ against a stated standard rather than a preference.
   disabled every Rework Function. Project content still does not. §8.4 is not wrong, but a
   user promised "my music never leaves this machine" should be told precisely that — their
   music, not the manifest.
+
+### Cross-check against ADR-006, added 2026-08-23
+
+[ADR-006](ADR-006-function-surface-and-function-file.md) and
+[`docs/specs/function-surface.md`](../specs/function-surface.md) merged into `dev` after this ADR was drafted;
+that merge is now in this branch, and the two documents were read against each other.
+**Result: no contradiction.** Three touchpoints, recorded so the next reader does not have
+to redo the comparison:
+
+- **The spec places obligation O-4.1 on this issue** (`function-surface.md` §8): every
+  `ToolDialect` must declare whether it enforces closed schemas, because a dialect that does
+  not lowers the floor for every Function. This ADR accepts that obligation. The "Criteria
+  for adding a provider" below are the acceptance test for that declaration — criteria 1–3
+  are what "enforces closed schemas" has to mean for the declaration to be honest.
+- **The frozen surface leaves range enforcement where decision 2 put it.** Spec §2.2 closes
+  *enumerated* domains at schema level (`add_effect`'s six Effects) but is silent on numeric
+  ranges — velocity, MIDI note, step index stay plain integers. Nothing in the spec assumes
+  the API enforces bounds, so the local validator remains the only range enforcement in the
+  design. The verification task below is unchanged and now runs against a frozen surface.
+- **The spec's privacy chain leans on finding 1.** The worked trace in spec §7 (its link 2:
+  "the model can only select a Function that is in the file") rests on the tool-*name*
+  guarantee, which the evidence shows only Anthropic states explicitly. That chain is a
+  consumer of decision 1, not just of strict mode in general — one more reason rejected
+  alternative B stays rejected.
 
 ### Verification task before Issue #16 is built
 
