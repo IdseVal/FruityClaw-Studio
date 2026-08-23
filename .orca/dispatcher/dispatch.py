@@ -236,18 +236,22 @@ def gh_pr_add_label(pr_number: int, label: str) -> None:
     _run(["gh", "pr", "edit", str(pr_number), "--add-label", label])
 
 
+import re
+
+# Orca rewrites `--name feature/issue-<n>` into a branch named
+# `<gitusername>/feature-issue-<n>` (flattens the slash, prefixes the git username).
+# Accept both my ideal form and Orca's actual form, with or without ref prefix.
+_FEATURE_BRANCH_RE = re.compile(r"(?:^|/)feature[-/]issue-(\d+)")
+
+
 def _issue_number_from_branch(branch: str) -> int | None:
-    """Parse ``feature/issue-<n>`` (with or without a leading ``refs/heads/``)."""
+    """Parse an issue number out of a dispatcher-created branch name."""
 
     stripped = branch.removeprefix("refs/heads/")
-    if not stripped.startswith(FEATURE_BRANCH_PREFIX):
+    match = _FEATURE_BRANCH_RE.search(stripped)
+    if not match:
         return None
-    tail = stripped[len(FEATURE_BRANCH_PREFIX):]
-    number_str, _, _ = tail.partition("/")
-    try:
-        return int(number_str)
-    except ValueError:
-        return None
+    return int(match.group(1))
 
 
 def find_worktree_selector_for_branch(branch: str) -> str | None:
@@ -376,70 +380,62 @@ def build_pr_role_prompt(
     pr: dict[str, Any],
     issue_number: int | None,
 ) -> str | None:
-    """Compose the first-turn prompt for a Tester or Reviewer spawned onto an open PR."""
+    """Compose a SMALL first-turn prompt (~900 chars) for a Tester or Reviewer
+    spawned onto an open PR. The agent fetches its role and the PR itself."""
 
     role_file = ROLES_DIR / f"{role}.md"
     if not role_file.exists():
         return None
-    system_prompt = role_file.read_text(encoding="utf-8")
-    labels = ", ".join(sorted(label["name"] for label in pr.get("labels", []))) or "(none)"
-    body = pr.get("body") or "(empty)"
-    issue_line = (
-        f"Originating issue: #{issue_number}"
+    pr_number = int(pr["number"])
+    issue_note = (
+        f"originating issue #{issue_number}"
         if issue_number is not None
-        else "Originating issue: (unknown; branch did not match feature/issue-<n>)"
+        else "no originating issue (branch did not match feature-issue-<n>)"
     )
 
     if role == "tester":
-        stage_instructions = f"""When you are finished:
-
-1. Run the project's test suite (per docs or the project's conventions). Reproduce
-   any failing test and capture what it did.
-2. If ALL tests pass:  `gh pr edit {pr['number']} --add-label {TESTED_LABEL}`, then
-   post a comment on the PR summarising the run (which suites ran, counts, and any
-   flakes seen). The dispatcher will spawn the Reviewer on the next poll tick.
-3. If ANY test fails, or you cannot run the suite:
-   `gh pr edit {pr['number']} --add-label {BLOCKED_LABEL}`, then post a comment on
-   the PR explaining what failed and what the Developer needs to fix. The dispatcher
-   will stop touching this PR; a human unblocks it.
-
-Do not push commits, do not merge, do not touch main."""
+        actions = (
+            f"1. Run the project's test suite (per docs or the project's conventions). "
+            f"Reproduce any failing test and capture what it did.\n"
+            f"2. If ALL tests pass:  "
+            f"`gh pr edit {pr_number} --add-label {TESTED_LABEL}`, then post a "
+            f"comment on the PR summarising the run.\n"
+            f"3. If ANY test fails, or you cannot run the suite:  "
+            f"`gh pr edit {pr_number} --add-label {BLOCKED_LABEL}`, then post a "
+            f"comment explaining what failed.\n"
+            f"\n"
+            f"Do NOT push commits, do NOT merge."
+        )
     elif role == "reviewer":
-        stage_instructions = f"""When you are finished:
-
-1. Read the diff (`git diff dev...HEAD`) and the linked issue #{issue_number if issue_number is not None else '?'}.
-   Verify the code fulfils the spec and meets the code standard (easily readable,
-   minimalist, no premature abstraction).
-2. If you approve:  `gh pr merge {pr['number']} --squash --delete-branch`, then post
-   a short approval comment on the PR. This merges into `dev`.
-3. If you want changes:  `gh pr edit {pr['number']} --add-label {BLOCKED_LABEL}`,
-   post a review comment listing the required changes. The dispatcher will stop
-   touching this PR; a human unblocks it after the Developer addresses the feedback.
-
-You may merge into `dev` and only `dev`. You are STRICTLY FORBIDDEN from merging any
-branch into `main`."""
+        issue_ref = str(issue_number) if issue_number is not None else "?"
+        actions = (
+            f"1. Read the diff (`git diff dev...HEAD`) and the linked issue "
+            f"#{issue_ref}. Verify the code fulfils the spec and meets the code "
+            f"standard (easily readable, minimalist, no premature abstraction).\n"
+            f"2. If you approve:  "
+            f"`gh pr merge {pr_number} --squash --delete-branch`, then post an "
+            f"approval comment on the PR. This merges into `dev`.\n"
+            f"3. If you want changes:  "
+            f"`gh pr edit {pr_number} --add-label {BLOCKED_LABEL}`, post a review "
+            f"comment listing the required changes."
+        )
     else:
         return None
 
-    return f"""{system_prompt}
-
----
-DISPATCH CONTEXT (injected by the Dispatcher process for the PR pipeline)
-
-Role: {role}
-{issue_line}
-PR #{pr['number']}: {pr['title']}
-Labels:  {labels}
-URL:     {pr['url']}
-Branch:  {pr.get('headRefName') or '(unknown)'}
-
-{stage_instructions}
-
----
-PR BODY
-
-{body}
-"""
+    return (
+        f"You are being dispatched as the **{role}** for PR #{pr_number} "
+        f"({issue_note}).\n"
+        "\n"
+        "Load your context:\n"
+        f"  cat ~/.orca/roles/{role}.md\n"
+        f"  gh pr view {pr_number}\n"
+        f"  git log --oneline dev..HEAD\n"
+        "\n"
+        f"Then:\n{actions}\n"
+        "\n"
+        f"You may merge into `dev` and only `dev`. STRICTLY FORBIDDEN from merging "
+        f"anything into `main`.\n"
+    )
 
 
 def role_from_labels(labels: set[str]) -> tuple[str | None, str]:
@@ -507,48 +503,52 @@ def build_role_prompt(
     cycle: int,
     max_cycles: int,
 ) -> str | None:
-    """Compose the first-turn prompt for the assigned role. Returns None if the role
-    prompt file is missing on this host — the caller comments and skips."""
+    """Compose a SMALL first-turn prompt (~800 chars).
+
+    The agent fetches its full role prompt and the issue body itself with local
+    commands. This keeps the initial prompt well under any argv or terminal-input
+    limit, and keeps the responsibility for reading the role in one place (the
+    role file on disk) rather than duplicating it into every dispatch.
+
+    Returns None if the role prompt file is missing on this host — the caller
+    comments and skips.
+    """
 
     role_file = ROLES_DIR / f"{role}.md"
     if not role_file.exists():
         return None
-    system_prompt = role_file.read_text(encoding="utf-8")
-    labels = ", ".join(sorted(label["name"] for label in issue.get("labels", []))) or "(none)"
     skill_list = ", ".join(skills) if skills else "(baseline only)"
-    body = issue.get("body") or "(empty)"
+    label_list = (
+        ", ".join(sorted(label["name"] for label in issue.get("labels", [])))
+        or "(none)"
+    )
+    issue_number = int(issue["number"])
 
-    return f"""{system_prompt}
-
----
-DISPATCH CONTEXT (injected by the Dispatcher process)
-
-Role:     {role}
-Pipeline: {pipeline}
-Cycle:    {cycle}/{max_cycles}
-Skills:   {skill_list}
-
-Issue #{issue['number']}: {issue['title']}
-Labels:   {labels}
-URL:      {issue['url']}
-
-Read `docs/CORE_DOCUMENT.md`, the relevant `docs/specs/*.md` and any ADRs before you
-begin. Do only what this issue asks. When you are finished:
-
-1. Open a PR from your worktree branch into `dev` with `gh pr create`.
-2. If your work touches data or a pipeline, paste evidence into the PR body per
-   `.orca/dispatch.yml` evidence gates (counts reconciled, output sampled, cost
-   measured — whichever apply).
-3. Post a completion comment on issue #{issue['number']}.
-
-You are STRICTLY FORBIDDEN from merging any branch into `main`. Only the Reviewer merges
-into `dev`; the human merges `dev` into `main`.
-
----
-ISSUE BODY
-
-{body}
-"""
+    return (
+        f"You are being dispatched as the **{role}** for issue #{issue_number} in "
+        f"this project.\n"
+        "\n"
+        "Load your context before doing anything:\n"
+        f"  1. `cat ~/.orca/roles/{role}.md`  -- your role instructions\n"
+        f"  2. `gh issue view {issue_number}`  -- the task\n"
+        "  3. `cat docs/CORE_DOCUMENT.md`  -- project single source of truth\n"
+        "  4. Read the relevant `docs/specs/*.md` and any ADRs.\n"
+        "\n"
+        "Then follow your role instructions. When you are done, open a PR into "
+        "`dev`:\n"
+        "  `gh pr create --base dev --fill`\n"
+        "\n"
+        "Dispatcher context:\n"
+        f"- role={role}, pipeline={pipeline}, cycle={cycle}/{max_cycles}\n"
+        f"- skills={skill_list}\n"
+        f"- labels={label_list}\n"
+        "\n"
+        f"Rules:\n"
+        f"- STRICTLY FORBIDDEN from merging any branch into `main`.\n"
+        f"- If your role requires a skill you don't have (check `~/.claude/skills`), "
+        f"add a comment to issue #{issue_number} saying which skill is missing and "
+        f"stop. A human resolves.\n"
+    )
 
 
 def dispatch_issue(
