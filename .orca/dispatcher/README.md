@@ -1,125 +1,64 @@
 # The Dispatcher
 
-The Dispatcher is often mistaken for a chat agent because its policy sits next to the
-six real agent prompts at `~/.orca/roles/dispatcher.md` (a shared, host-level directory
-that all projects use). **It is not an agent.** It is a running process on the host:
-this directory.
+A deterministic reconciler that runs the agent workflow. Not an agent. Its policy (the
+human-readable version of the same rules) is `~/.orca/roles/dispatcher.md`; the full
+behavioural contract is the docstring at the top of `dispatch.py`.
 
-- `dispatch.py` — the poller. Runs on the host (not inside the dev container),
-  because it invokes `orca` (a host desktop app) and `gh`.
-- `state.json` — what has been dispatched so far. Gitignored. Delete to reset.
-- `~/.orca/roles/dispatcher.md` — the **policy** the poller enforces. When you
-  change one, change the other.
+**One idea:** it never trusts an agent to report back. Every tick it observes GitHub
+(issues, PRs, labels, diffs) and Orca (worktrees, terminal liveness), computes what should
+be true, and does the difference. Every action is idempotent.
 
-## What it does, in order
+## Files
 
-1. Calls `gh issue list --state open --label ready --json …` every `--interval` seconds.
-2. Filters out issues already in `state.json` and issues carrying the `escalated` label.
-3. **Reads the `role:*` label to pick the role.** Every ready issue must carry
-   *exactly one* `role:*` label (`role:developer`, `role:architect`,
-   `role:researcher`, etc.). Zero or multiple → the poller comments once
-   (`Cannot dispatch: no role:* label found` / `multiple role:* labels found`),
-   records `role_missing` in state, and skips. When the labels change the issue is
-   re-evaluated without re-commenting.
-4. Loads `~/.orca/roles/<role>.md` as the system prompt. Missing → comments once and
-   skips.
-5. Computes the pipeline. `role:developer` gets `default` or `trivial` (per the
-   `trivial` label and `pipelines.trivial.forbid_labels`). Every other role is a
-   single-agent dispatch named after the role.
-6. Computes the skills: baseline for the chosen role from `roles.<role>.skills` in
-   `../dispatch.yml`, plus any earned by other labels per `labels.*.skills`.
-7. `orca worktree create --repo path:<repo> --name feature/issue-<n> --issue <n>
-   --base-branch dev --agent claude --prompt "<role prompt + DISPATCH CONTEXT + issue body>"`.
-8. Records the dispatch in `state.json` and comments on the issue with the worktree
-   name, role, pipeline and cycle count.
-9. If an issue is re-labelled `ready` after a failed round (its `state.json` entry is
-   removed by hand, or its cycle count is bumped), the poller dispatches it again — up
-   to `circuit_breaker.max_cycles` (3). The next attempt adds the `escalated` label,
-   posts `Circuit breaker tripped: 3 failed attempts.`, and stops touching the issue.
-
-## PR pipeline (Tester and Reviewer)
-
-A second poll pass on each tick walks every open PR whose base is `dev`, driving the
-Tester → Reviewer → merge pipeline automatically.
-
-1. **New PR seen** (from a `feature/issue-<n>` branch with an existing Orca worktree):
-   spawn a Claude session in that worktree as the **Tester**. Loads
-   `~/.orca/roles/tester.md`, adds a DISPATCH CONTEXT block, sends via
-   `orca terminal send`.
-2. **Tester passes** → adds label `state:tested` on the PR. Dispatcher spawns a
-   Claude session in the same worktree as the **Reviewer**.
-3. **Reviewer approves** → merges with `gh pr merge <n> --squash --delete-branch`.
-   PR closes, dispatcher drops the entry from `state.json`.
-
-Failure signal: either agent adds label `state:blocked` (test failure or
-review-requires-changes). The dispatcher records the block, stops touching the PR,
-and hands off to a human. Re-dispatching the Developer with feedback is v2 — for now
-the human either fixes the code themselves or bumps the developer worktree back into
-play manually.
-
-Deferral: a PR whose head branch has no Orca worktree (hand-opened, or worktree
-archived) is skipped on that tick and retried on the next. That gives the human a
-chance to open the worktree before the Tester spawns.
-
-Prompts sent to Tester and Reviewer are also written to
-`.orca/dispatcher/prompts/pr-<n>-<role>.txt` (gitignored) so you can inspect exactly
-what the dispatcher fed each agent when triaging.
-
-## Prerequisites on the host
-
-- Python 3.9+ and PyYAML (`pip install pyyaml`).
-- `gh` authenticated for this repo (`gh auth status`).
-- `orca` on PATH, and Orca open (`orca status` reports `runtimeReachable: true`).
-- Labels on the GitHub repo: `ready`, `escalated`, one or more `role:*` labels
-  (`role:developer`, `role:architect`, `role:researcher`, …), plus the routing
-  labels from section 8 of `agent-workflow-setup.md` (`ui`, `seo`, `scraper`, `bug`,
-  `data`, `trivial`).
-
-## Running it
-
-**Foreground, one terminal (simplest):**
-
-```bash
-python .orca/dispatcher/dispatch.py
-```
-
-Ctrl+C to stop. Poll interval defaults to 60s; override with `--interval 30`.
-
-**Cron / Orca automation (`--once`):**
-
-```bash
-python .orca/dispatcher/dispatch.py --once
-```
-
-Runs one poll pass and exits. Wire this into an Orca automation (`orca automations
-create`) or a Task Scheduler entry to poll at whatever cadence you want. `state.json`
-survives across runs.
-
-**Windows Task Scheduler**: create a Basic Task that runs
-`python C:\path\to\repo\.orca\dispatcher\dispatch.py --once` every 5 minutes.
-
-## Failure modes and what happens
-
-| What breaks | What the poller does |
+| File | What |
 | --- | --- |
-| `gh` not installed / unauthenticated | Prints the error to stderr, treats the tick as "no ready issues". Retries on the next tick. |
-| Orca not open | `orca worktree create` fails; the issue stays undispatched and is retried on the next tick. No cycle is spent. |
-| Config missing (`.orca/dispatch.yml`) | The poller raises on startup — a bad config must not silently produce a no-op dispatcher. |
-| `state.json` corrupted | Warned to stderr; the poller starts with an empty state. Every open ready issue is re-dispatched — which is intentional: better to duplicate than to silently drop. |
-| Ctrl+C mid-tick | The 1-second sleep slices catch the signal; the current subprocess call is allowed to finish, then the loop exits. |
+| `dispatch.py` | the reconciler; `run` / `once` / `status` / `doctor` / `onboard` |
+| `install-task.ps1` | installs it as a Windows scheduled task (at logon, auto-restart) |
+| `state.json` | de-dup memory only (cycles, nudges, spawns). Gitignored. Safe to delete. |
+| `prompts/` | the brief files agents are pointed at. Gitignored. Useful for triage. |
+| `dispatcher.log` | rotating log. Gitignored. |
+| `dispatcher.lock` | one dispatcher per repo. |
 
-## Re-dispatching a failed issue
+## Commands
 
-An issue whose worker did not open a merged PR is still in `state.json`. To retry it:
+```powershell
+python .orca\dispatcher\dispatch.py doctor --fix   # prerequisites; creates missing labels
+python .orca\dispatcher\dispatch.py onboard        # start the PO & Analyst interview worktree
+python .orca\dispatcher\dispatch.py status         # the board: issues, PRs, sessions
+python .orca\dispatcher\dispatch.py once --dry-run # what one tick would do
+python .orca\dispatcher\dispatch.py run            # foreground loop (Ctrl+C to stop)
+powershell -ExecutionPolicy Bypass -File .orca\dispatcher\install-task.ps1   # run forever
+```
 
-1. Fix whatever the worker got stuck on (spec, prompt, environment).
-2. Bump its cycle count manually by editing `state.json`, OR delete its entry outright
-   (which resets the cycle to 0 — use this when the previous failure was the
-   Dispatcher's fault, not the worker's).
-3. Ensure the issue still carries the `ready` label and not `escalated`.
+## What it does each tick
 
-## The circuit breaker
+See the docstring in `dispatch.py` and `~/.orca/roles/dispatcher.md`. In one breath:
+gate on the core document being on `dev`; dispatch `ready` issues whose `Depends on:` are
+closed (one role per `role:*` label, up to `max_active_issues`); nudge idle sessions once,
+then `needs-human`; PR with no state label -> docs-only gets `state:tested` automatically,
+otherwise spawn the Tester; `state:tested` -> spawn the Reviewer, who merges into `dev`;
+`state:blocked` -> back to the Developer's session under the 3-cycle breaker, else
+`escalated`; merged -> close the issue, remove the worktree; `needs-human` -> page the
+human and wait.
 
-`max_cycles: 3` in `.orca/dispatch.yml`. Do not raise it to force something through: an
-issue that has failed three times is telling you the specification is wrong. The fourth
-attempt at the wrong thing costs more than asking.
+## Tuning
+
+`.orca/dispatch.yml` -> `dispatcher:` block (interval, concurrency, idle thresholds,
+docs-only rules, `github_mention`). `circuit_breaker.max_cycles` (do not raise it).
+
+## Failure modes
+
+| What breaks | What happens |
+| --- | --- |
+| Orca not open | worktree/terminal calls fail; the tick logs it and retries next tick. Nothing is lost. |
+| `gh` unauthenticated | the tick sees no issues/PRs and does nothing. `doctor` says so. |
+| State file deleted | at most a duplicate comment or a second nudge; truth is in GitHub/Orca. |
+| Agent ends without label/PR | nudge after `idle_minutes_before_nudge`, `needs-human` after `idle_minutes_after_nudge`. |
+| Agent sets `needs-human` | human is @mentioned on GitHub (+ e-mail if SMTP set), Orca tab brought forward; dispatcher waits. |
+| Two dispatchers | the lock file refuses the second. |
+
+## Re-running an issue by hand
+
+Remove `escalated`/`needs-human` as appropriate; if its worktree is gone the dispatcher
+re-dispatches on the next tick (cycle continues counting). To reset the cycle count,
+delete the issue's entry from `state.json`.

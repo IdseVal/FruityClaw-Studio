@@ -7,3 +7,5 @@ mail/__pycache__/
 
 # scraping / research scratch output
 .just-scrape/
+.orca/dispatcher/dispatcher.lock
+.orca/dispatcher/dispatcher.log*
