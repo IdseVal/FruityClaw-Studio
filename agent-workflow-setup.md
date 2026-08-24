@@ -1128,10 +1128,14 @@ def minutes_since(ms: Optional[int]) -> float:
 
 def run(argv: list[str], timeout: int = SUBPROCESS_TIMEOUT) -> tuple[bool, str, str]:
     """Run a command; never raise. Returns (ok, stdout, stderr)."""
+    # Under pythonw there is no console, so every console child (gh/git/orca) would
+    # otherwise get a brand-new visible window that steals focus from the human.
+    flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
     try:
         proc = subprocess.run(
             argv, check=False, capture_output=True, text=True,
             encoding="utf-8", errors="replace", timeout=timeout,
+            creationflags=flags,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
         log.warning("%s unavailable: %s", argv[0], exc)
