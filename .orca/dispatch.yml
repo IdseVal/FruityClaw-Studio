@@ -23,6 +23,8 @@ gates:
   core_document:                     # nothing is dispatched until the PO's core document is on `dev`
     path: docs/CORE_DOCUMENT.md
     empty_marker: "Status: EMPTY"
+    achieved_marker: "Status: ACHIEVED"  # once on `dev`, dispatching stops and the human is paged;
+                                         # `dispatch.py onboard` runs a revision interview to reopen
 
 # Role prompts are HOST-LEVEL at ~/.orca/roles/<role>.md and shared across every project.
 # This block only lists the baseline skills each role is told it has.

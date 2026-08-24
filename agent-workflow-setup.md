@@ -646,6 +646,17 @@ PHASE 2 (after the PR is merged):
 - `docs/CORE_DOCUMENT.md` is living. When a decision changes it, update it (through a PR)
   and say what changed; never let a spec contradict it silently.
 
+RECURRING DUTIES (the dispatcher spawns you for these; the brief says which):
+- BACKLOG AUDIT: the pipeline drained. Compare what is merged on `dev` against the core
+  document. Either file the missing issues (labels and `Depends on:` as in phase 2), or --
+  only when nothing is missing AND no OPEN item remains -- declare completion by setting the
+  status line to `Status: ACHIEVED -- <date>` through a normal PR into `dev`. Never declare
+  completion past an unanswered OPEN item: file it as a `needs-human` issue instead.
+- REVISION ROUND: the human wants a new round after completion. Interview them (same
+  protocol as phase 1) about new features, changes and feedback; update the core document;
+  set `Status: AGREED -- <date>` again and PR it into `dev` -- that reopens the dispatch
+  gate. Then derive specs/ADRs and file issues as in phase 2.
+
 FORBIDDEN:
 - You do not write implementation code.
 - You are STRICTLY FORBIDDEN from merging any branch into `main`. You do not merge into
@@ -878,6 +889,8 @@ gates:
   core_document:                     # nothing is dispatched until the PO's core document is on `dev`
     path: docs/CORE_DOCUMENT.md
     empty_marker: "Status: EMPTY"
+    achieved_marker: "Status: ACHIEVED"  # once on `dev`, dispatching stops and the human is paged;
+                                         # `dispatch.py onboard` runs a revision interview to reopen
 
 # Role prompts are HOST-LEVEL at ~/.orca/roles/<role>.md and shared across every project.
 # This block only lists the baseline skills each role is told it has.
@@ -1014,13 +1027,26 @@ policy for the same thing)
       - Dependencies close by themselves, so "architects first, then developers" is a
         matter of the PO writing `Depends on: #5, #6` in developer issues. No human batch
         marking.
+    Backlog (closing the loop)
+      - Drained (no open issues, no open PRs into `dev`, no worktrees) -> spawn the
+        PO & Analyst for a backlog audit: compare what is merged on `dev` against the core
+        document, then either file the missing issues (the loop re-enters by itself) or
+        declare completion by flipping the core document status line to
+        `Status: ACHIEVED -- <date>` through a normal PR.
+      - A drain with the same merged-PR high-water mark as the previous audit means that
+        audit produced nothing observable: page the human instead of auditing forever.
+      - `Status: ACHIEVED` on `dev` -> dispatching stops and the human is paged once:
+        review the result, open the dev -> main PR yourself, and when new work is wanted
+        run `dispatch.py onboard` -- with a populated core document it becomes a REVISION
+        interview that sets the status back to AGREED, which reopens the gate.
 
 SUBCOMMANDS
     run               daemon loop (default interval 60s)
     once              one tick and exit (scheduled-task friendly)
     status            print the board (issues, PRs, sessions)
     doctor [--fix]    check prerequisites; --fix creates missing labels
-    onboard           start the PO & Analyst onboarding worktree
+    onboard           start the PO & Analyst: first interview, or a revision round when
+                      the core document is already populated (new features / changes)
     Flags: --dry-run (decide, change nothing), --interval N, --verbose
 
 STATE
@@ -1245,6 +1271,7 @@ def load_config() -> dict[str, Any]:
     g = cfg.setdefault("gates", {}).setdefault("core_document", {})
     g.setdefault("path", "docs/CORE_DOCUMENT.md")
     g.setdefault("empty_marker", "Status: EMPTY")
+    g.setdefault("achieved_marker", "Status: ACHIEVED")
     cfg.setdefault("branches", {}).setdefault("base", "dev")
     cfg.setdefault("circuit_breaker", {}).setdefault("max_cycles", 3)
     return cfg
@@ -1256,6 +1283,7 @@ class State:
     prs: dict[str, dict[str, Any]] = field(default_factory=dict)
     notified: dict[str, int] = field(default_factory=dict)   # "issue:5" / "pr:22" -> ms
     closed_issues: list[int] = field(default_factory=list)  # issues we closed (dedupe)
+    backlog: dict[str, Any] = field(default_factory=dict)   # audit epoch / timers (dedupe)
 
     @classmethod
     def load(cls) -> "State":
@@ -1269,6 +1297,7 @@ class State:
         st = cls(
             issues=raw.get("issues", {}), prs=raw.get("prs", {}),
             notified=raw.get("notified", {}), closed_issues=raw.get("closed_issues", []),
+            backlog=raw.get("backlog", {}),
         )
         # Migrate v1 layout (dispatched{} + prs{stage}) so in-flight work is not redone.
         for num, old in (raw.get("dispatched") or {}).items():
@@ -1295,6 +1324,7 @@ class State:
         tmp.write_text(json.dumps({
             "issues": self.issues, "prs": self.prs,
             "notified": self.notified, "closed_issues": self.closed_issues,
+            "backlog": self.backlog,
         }, indent=2), encoding="utf-8")
         tmp.replace(STATE_FILE)
 
@@ -1386,6 +1416,7 @@ class Observed:
     worktrees: list[Worktree]  # this repo
     gate_open: bool
     gate_reason: str
+    achieved: bool             # core document on dev carries the achieved marker
     repo_id: Optional[str]
 
 
@@ -1436,20 +1467,25 @@ def observe(cfg: dict[str, Any]) -> Observed:
             status=raw.get("workspaceStatus") or "",
         ))
 
-    gate_open, gate_reason = core_document_gate(cfg)
-    return Observed(issues, prs, merged, worktrees, gate_open, gate_reason, repo_id)
+    gate_open, gate_reason, achieved = core_document_gate(cfg)
+    return Observed(issues, prs, merged, worktrees, gate_open, gate_reason, achieved, repo_id)
 
 
-def core_document_gate(cfg: dict[str, Any]) -> tuple[bool, str]:
+def core_document_gate(cfg: dict[str, Any]) -> tuple[bool, str, bool]:
+    """(gate_open, reason, achieved). Achieved closes the gate: the project is complete
+    until a revision interview sets the status back to AGREED."""
     g = cfg["gates"]["core_document"]
     base = cfg["branches"]["base"]
     run(["git", "-C", str(REPO_ROOT), "fetch", "-q", "origin", base], timeout=60)
     ok, out, _ = run(["git", "-C", str(REPO_ROOT), "show", f"origin/{base}:{g['path']}"])
     if not ok:
-        return False, f"{g['path']} not found on origin/{base}"
+        return False, f"{g['path']} not found on origin/{base}", False
     if g["empty_marker"] in out:
-        return False, f"{g['path']} on {base} still says '{g['empty_marker']}' -- run the onboarding interview"
-    return True, "core document present on " + base
+        return False, f"{g['path']} on {base} still says '{g['empty_marker']}' -- run the onboarding interview", False
+    if g["achieved_marker"] in out:
+        return False, (f"{g['path']} on {base} says '{g['achieved_marker']}' -- project complete; "
+                       "run `dispatch.py onboard` for a revision interview to start a new round"), True
+    return True, "core document present on " + base, False
 
 
 def terminals_for(wt: Worktree) -> list[dict[str, Any]]:
@@ -1638,6 +1674,57 @@ Phase 2 -- specs, ADRs, issues (after the PR is merged):
 """
 
 
+AUDIT_WT_PREFIX = "backlog-audit"
+
+
+def audit_brief(base: str, achieved_marker: str) -> str:
+    return f"""# Backlog audit -- PO & Analyst
+
+The pipeline is DRAINED: no open issues, no open PRs into `{base}`, no active worktrees.
+Decide what happens next. Exactly ONE of two outcomes, and it must be visible to the
+dispatcher on GitHub -- a session that ends without either stalls the whole project.
+
+1. `cat ~/.orca/roles/po-analyst.md` -- you are the PO & Analyst.
+2. Re-read `docs/CORE_DOCUMENT.md`, every `docs/specs/*.md` and `docs/adrs/*.md`, and the
+   closed issues (`gh issue list --state closed --limit 200`). Compare what the core
+   document promises against what is actually merged on `{base}`.
+3. OUTCOME A -- gaps remain: file the missing GitHub issues. Each: what is wanted, how
+   anyone will know it worked, what is out of scope; exactly one `role:*` label; skill
+   labels where they apply; `trivial` where honest; `ready`; ordering ONLY via a body line
+   `Depends on: #a, #b`. The dispatcher picks them up by itself.
+4. OUTCOME B -- everything the core document promises is merged AND the document contains
+   no OPEN item: edit its status line to `{achieved_marker} -- <date>`, commit on this
+   branch, `git push -u origin HEAD`, and open a PR into `{base}` titled
+   "Core document achieved". The pipeline reviews and merges it; the dispatcher then stops
+   and pages the human.
+   - You may NOT choose B while any OPEN item exists in the core document. File one issue
+     per OPEN item, label it `needs-human`, and that is OUTCOME A.
+5. State in one line which outcome you chose, then stop.
+{COMMON_RULES}
+"""
+
+
+def revision_brief(base: str, achieved_marker: str) -> str:
+    return f"""# Revision round -- PO & Analyst
+
+The project already has an agreed core document on `{base}`. The human wants a NEW ROUND:
+new features, changes, fixes, feedback from using the result. The human is in this session.
+
+1. `cat ~/.orca/roles/po-analyst.md` -- you are the PO & Analyst.
+2. Read `docs/CORE_DOCUMENT.md` (the `{base}` version), the specs and ADRs, and skim the
+   closed issues so you know what already exists.
+3. Interview the human IN THIS SESSION, in rounds: what should change, what is new, what
+   should go. Record every answer in the core document, read it back, ask what is wrong or
+   missing. Unknowns are OPEN items, never guesses.
+4. When the human says AGREED: set the status line to `Status: AGREED -- <date>` (replacing
+   `{achieved_marker} -- ...` if present), commit, `git push -u origin HEAD`, and open a PR
+   into `{base}`. Merging that PR reopens the dispatch gate by itself.
+5. After that PR merges: update specs and ADRs and file the new issues exactly as in
+   phase 2 of your role (one `role:*` label, skill labels, `ready`, `Depends on:`).
+{COMMON_RULES}
+"""
+
+
 # --------------------------------------------------------------------------- orca actions
 
 
@@ -1734,13 +1821,17 @@ def gh_recent_comments(pr_number: int, limit: int = 4) -> str:
 
 
 def notify_human(cfg: dict[str, Any], state: State, key: str, subject: str, body: str,
-                 kind: str, number: int, wt: Optional[Worktree]) -> None:
-    """Mention on GitHub (GitHub e-mails mentions), bring the Orca tab forward, optional SMTP."""
+                 kind: str, number: Optional[int], wt: Optional[Worktree]) -> None:
+    """Mention on GitHub (GitHub e-mails mentions), bring the Orca tab forward, optional SMTP.
+    number=None skips the GitHub comment (no issue/PR to carry it); the other channels still fire."""
     if key in state.notified:
         return
     mention = (cfg["dispatcher"].get("notify") or {}).get("github_mention", "")
     text = f"{mention} {subject}\n\n{body}".strip()
-    act(f"notify human: {subject}", lambda: gh_comment(kind, number, text))
+    if number is not None:
+        act(f"notify human: {subject}", lambda: gh_comment(kind, number, text))
+    else:
+        log.info("notify human (no GitHub target): %s", subject)
     if wt:
         act(f"orca: bring {wt.name} forward", lambda: (orca_note(wt, f"NEEDS HUMAN: {subject}"), orca_bring_forward(wt)))
     smtp = {k: os.environ.get(k, "") for k in ("SMTP_SENDER_EMAIL", "SMTP_RECEIVER_EMAIL", "SMTP_PASSWORD", "SMTP_SERVER", "SMTP_PORT")}
@@ -2055,6 +2146,101 @@ def reconcile_merged(obs: Observed, cfg: dict[str, Any], state: State) -> None:
             state.save()
 
 
+# --------------------------------------------------------------------------- reconcile: backlog
+
+
+def reconcile_backlog(obs: Observed, cfg: dict[str, Any], state: State) -> None:
+    """Close the loop: drained pipeline -> PO & Analyst audit -> new issues or ACHIEVED.
+    Every transition is triggered by observed state, never by what an agent said."""
+    d = cfg["dispatcher"]
+    base = cfg["branches"]["base"]
+    g = cfg["gates"]["core_document"]
+    b = state.backlog
+
+    # Project complete: page the human once, then hold until a revision reopens the gate.
+    if obs.achieved:
+        if "achieved_notified" not in b:
+            target = next((p for p in obs.merged if g["path"] in p.files), None)
+            body = (f"Every issue is closed and `{g['path']}` on `{base}` is marked ACHIEVED.\n"
+                    f"Review the result. When satisfied, open the {base} -> main PR yourself.\n"
+                    f"For a new round (features, changes, feedback): run "
+                    f"`python .orca/dispatcher/dispatch.py onboard` -- a revision interview that "
+                    f"sets the status back to AGREED and reopens the gate.")
+            notify_human(cfg, state, "project:achieved", "project complete -- core document ACHIEVED",
+                         body, "pr", target.number if target else None, None)
+            b["achieved_notified"] = now_ms()
+            state.save()
+        return
+    if b.pop("achieved_notified", None) is not None:  # a revision round reopened the gate
+        state.notified.pop("project:achieved", None)
+        state.save()
+
+    if not obs.gate_open:
+        return
+
+    open_issues = any(i.state == "OPEN" for i in obs.issues.values())
+
+    # An audit session exists: watch it. Its outcome is read from GitHub, not from the agent.
+    audits = [wt for wt in obs.worktrees if wt.name.startswith(AUDIT_WT_PREFIX)]
+    if audits:
+        wt = audits[0]
+        if any(p.head == wt.branch for p in obs.prs):
+            return  # OUTCOME B in flight: the PR pipeline owns this worktree now
+        terms = terminals_for(wt)
+        idle = minutes_since(last_output_ms(terms)) if terms else minutes_since(b.get("audit_spawned"))
+        if open_issues:  # OUTCOME A: issues exist; once the session settles, clean up
+            if idle >= float(d["idle_minutes_before_nudge"]):
+                def _rm(wt=wt):
+                    orca_note(wt, "audit complete: issues filed", "completed")
+                    return orca_json(["worktree", "rm", "--worktree", f"id:{wt.id}", "--force"])
+                act(f"backlog audit filed issues -> remove worktree {wt.name}", _rm)
+                b.pop("audit_nudged", None)
+                state.save()
+            return
+        if not b.get("audit_nudged"):
+            if idle >= float(d["idle_minutes_before_nudge"]):
+                brief = write_brief("backlog-audit", audit_brief(base, g["achieved_marker"]))
+                act(f"backlog audit idle {idle:.0f} min with no outcome -> nudge",
+                    lambda wt=wt, brief=brief: orca_deliver(wt, "po-analyst audit", d["agent"], one_liner(brief)))
+                b["audit_nudged"] = now_ms()
+                state.save()
+        elif minutes_since(b["audit_nudged"]) >= float(d["idle_minutes_after_nudge"]) and \
+                idle >= float(d["idle_minutes_after_nudge"]):
+            notify_human(cfg, state, "backlog:audit-stalled", "backlog audit stalled",
+                         f"The PO & Analyst audit in worktree `{wt.name}` went quiet without filing "
+                         f"issues or declaring completion. Finish it in its session, or remove the "
+                         f"worktree and file the issues yourself.", "issue", None, wt)
+            b.pop("audit_nudged", None)
+            state.save()
+        return
+
+    # No audit running: spawn one when the pipeline is fully drained.
+    if open_issues or obs.prs or obs.worktrees:
+        return
+    epoch = max((p.number for p in obs.merged), default=0)  # merged-PR high-water mark
+    if b.get("audit_epoch") == epoch:
+        # Nothing merged since the last audit, yet it left no issues and no ACHIEVED:
+        # auditing again would loop forever. This is the human's call now.
+        notify_human(cfg, state, f"backlog:empty-audit:{epoch}", "backlog audit produced nothing",
+                     "The previous backlog audit ended without filing issues or declaring the core "
+                     "document achieved, and nothing has merged since. File issues yourself or run "
+                     "`dispatch.py onboard` for a revision interview.", "issue", None, None)
+        return
+    brief = write_brief("backlog-audit", audit_brief(base, g["achieved_marker"]))
+    name = f"{AUDIT_WT_PREFIX}-{epoch}"
+    def _spawn(name=name, brief=brief):
+        return orca_create_worktree(name, base, None, d["agent"], one_liner(brief))
+    res = act(f"pipeline drained -> spawn PO & Analyst backlog audit (epoch {epoch})", _spawn)
+    if DRY_RUN or res:
+        b["audit_epoch"] = epoch
+        b["audit_spawned"] = now_ms()
+        b.pop("audit_nudged", None)
+        state.notified.pop("backlog:audit-stalled", None)
+        state.save()
+    else:
+        log.warning("backlog audit: orca worktree create failed; will retry next tick")
+
+
 # --------------------------------------------------------------------------- tick & loop
 
 
@@ -2065,6 +2251,7 @@ def tick(cfg: dict[str, Any], state: State) -> None:
     reconcile_merged(obs, cfg, state)
     reconcile_prs(obs, cfg, state)
     reconcile_issues(obs, cfg, state)
+    reconcile_backlog(obs, cfg, state)
 
 
 def cmd_run(cfg: dict[str, Any], state: State, interval: int) -> int:
@@ -2196,8 +2383,11 @@ def cmd_doctor(cfg: dict[str, Any], fix: bool) -> int:
     ok(f"{len(wanted) - len(missing)}/{len(wanted)} skills installed") if not missing else \
         bad(f"skills missing: {missing}  (run: bash .orca/setup_skills.sh)")
     print("gate")
-    g_ok, g_why = core_document_gate(cfg)
-    (ok if g_ok else bad)(g_why)
+    g_ok, g_why, g_achieved = core_document_gate(cfg)
+    if g_achieved:
+        ok(g_why)  # complete is not a defect
+    else:
+        (ok if g_ok else bad)(g_why)
     print("state")
     try:
         HERE.mkdir(parents=True, exist_ok=True); (HERE / ".write-test").write_text("x"); (HERE / ".write-test").unlink()
@@ -2210,15 +2400,27 @@ def cmd_doctor(cfg: dict[str, Any], fix: bool) -> int:
 
 def cmd_onboard(cfg: dict[str, Any]) -> int:
     base = cfg["branches"]["base"]
-    brief = write_brief("onboarding", onboarding_brief(base))
-    res = act("create onboarding worktree with the PO & Analyst",
-              lambda: orca_create_worktree("onboarding", base, None, cfg["dispatcher"]["agent"], one_liner(brief), activate=True))
+    g = cfg["gates"]["core_document"]
+    run(["git", "-C", str(REPO_ROOT), "fetch", "-q", "origin", base], timeout=60)
+    ok, doc, _ = run(["git", "-C", str(REPO_ROOT), "show", f"origin/{base}:{g['path']}"])
+    populated = ok and g["empty_marker"] not in doc
+    if populated:
+        # The document exists (agreed or achieved): this is a REVISION round, not onboarding.
+        name = "revision-" + datetime.now().strftime("%Y%m%d-%H%M")
+        brief = write_brief(name, revision_brief(base, g["achieved_marker"]))
+        what = "revision"
+    else:
+        name = "onboarding"
+        brief = write_brief("onboarding", onboarding_brief(base))
+        what = "onboarding"
+    res = act(f"create {what} worktree with the PO & Analyst",
+              lambda: orca_create_worktree(name, base, None, cfg["dispatcher"]["agent"], one_liner(brief), activate=True))
     if DRY_RUN:
         return 0
     if not res:
         print("failed: is Orca open and the repo registered? run: dispatch.py doctor")
         return 1
-    print("onboarding worktree created; switch to Orca and talk to the PO & Analyst.")
+    print(f"{what} worktree created; switch to Orca and talk to the PO & Analyst.")
     return 0
 
 
