@@ -23,7 +23,7 @@ be true, and does the difference. Every action is idempotent.
 
 ```powershell
 python .orca\dispatcher\dispatch.py doctor --fix   # prerequisites; creates missing labels
-python .orca\dispatcher\dispatch.py onboard        # start the PO & Analyst interview worktree
+python .orca\dispatcher\dispatch.py onboard        # PO & Analyst: first interview, or a revision round
 python .orca\dispatcher\dispatch.py status         # the board: issues, PRs, sessions
 python .orca\dispatcher\dispatch.py once --dry-run # what one tick would do
 python .orca\dispatcher\dispatch.py run            # foreground loop (Ctrl+C to stop)
@@ -39,7 +39,10 @@ then `needs-human`; PR with no state label -> docs-only gets `state:tested` auto
 otherwise spawn the Tester; `state:tested` -> spawn the Reviewer, who merges into `dev`;
 `state:blocked` -> back to the Developer's session under the 3-cycle breaker, else
 `escalated`; merged -> close the issue, remove the worktree; `needs-human` -> page the
-human and wait.
+human and wait; pipeline drained -> spawn a PO & Analyst backlog audit, whose outcome
+(new issues, or a PR marking the core document `Status: ACHIEVED`) is read from GitHub,
+never from the agent; `ACHIEVED` on `dev` -> stop dispatching and page the human once
+(`onboard` then starts a revision interview that reopens the gate).
 
 ## Tuning
 
@@ -56,6 +59,7 @@ docs-only rules, `github_mention`). `circuit_breaker.max_cycles` (do not raise i
 | Agent ends without label/PR | nudge after `idle_minutes_before_nudge`, `needs-human` after `idle_minutes_after_nudge`. |
 | Agent sets `needs-human` | human is @mentioned on GitHub (+ e-mail if SMTP set), Orca tab brought forward; dispatcher waits. |
 | Two dispatchers | the lock file refuses the second. |
+| Backlog audit ends with no outcome | nudge -> page the human; never re-audited until something merges. |
 
 ## Re-running an issue by hand
 
