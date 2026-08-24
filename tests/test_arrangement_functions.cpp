@@ -192,6 +192,95 @@ TEST_CASE("validation failures return an error and touch nothing") {
     CHECK(f.project == original);
 }
 
+TEST_CASE("rename_track changes the name only and undo restores it") {
+    auto f = make_fixture();
+    Project original = f.project;
+    ProjectHistory history(std::move(f.project));
+
+    auto renamed = rename_track(history.read(), f.arrangement, f.track_a, "Lead");
+    REQUIRE(renamed.ok());
+    REQUIRE(history.apply(std::move(*renamed)) == ApplyResult::Applied);
+
+    const Track& t = track(history.read(), f.arrangement, f.track_a);
+    CHECK(t.name == "Lead");
+    CHECK(t.muted == false);
+    CHECK(t.placements.empty());
+    CHECK(track(history.read(), f.arrangement, f.track_b).name == "Track 2");
+
+    REQUIRE(history.undo());
+    CHECK(history.read() == original);
+}
+
+TEST_CASE("a no-net-change Delta reports NoChange and keeps the redo stack") {
+    auto f = make_fixture();
+    ProjectHistory history(std::move(f.project));
+
+    auto placed = add_placement(history.read(), f.arrangement, f.track_a, f.drum_pattern, 0);
+    REQUIRE(placed.ok());
+    REQUIRE(history.apply(std::move(placed->delta)) == ApplyResult::Applied);
+    REQUIRE(history.undo());
+    REQUIRE(history.state().can_redo);
+
+    // Renaming a Track to its current name observes no change at application
+    // time; contract section 5.3 says the future must survive it.
+    auto same = rename_track(history.read(), f.arrangement, f.track_a, "Track 1");
+    REQUIRE(same.ok());
+    CHECK(history.apply(std::move(*same)) == ApplyResult::NoChange);
+    CHECK(history.state().can_redo);
+    REQUIRE(history.redo());
+    CHECK(track(history.read(), f.arrangement, f.track_a).placements.size() == 1);
+}
+
+TEST_CASE("set_track_muted toggles one flag and a same-value set is a no-op") {
+    auto f = make_fixture();
+    Project original = f.project;
+    ProjectHistory history(std::move(f.project));
+
+    auto muted = set_track_muted(history.read(), f.arrangement, f.track_a, true);
+    REQUIRE(muted.ok());
+    REQUIRE(history.apply(std::move(*muted)) == ApplyResult::Applied);
+    CHECK(track(history.read(), f.arrangement, f.track_a).muted);
+    CHECK_FALSE(track(history.read(), f.arrangement, f.track_b).muted);
+
+    auto again = set_track_muted(history.read(), f.arrangement, f.track_a, true);
+    REQUIRE(again.ok());
+    CHECK(history.apply(std::move(*again)) == ApplyResult::NoChange);
+
+    REQUIRE(history.undo());
+    CHECK(history.read() == original);
+}
+
+TEST_CASE("move and resize reject invalid targets and lengths untouched") {
+    auto f = make_fixture();
+    ProjectHistory history(std::move(f.project));
+    auto placed = add_placement(history.read(), f.arrangement, f.track_a, f.drum_pattern, 0);
+    REQUIRE(placed.ok());
+    Id id = placed->id;
+    REQUIRE(history.apply(std::move(placed->delta)) == ApplyResult::Applied);
+    Project before = history.read();
+
+    CHECK_FALSE(move_placement(before, f.arrangement, f.track_a, id, 0, new_id()).ok());
+    CHECK_FALSE(move_placement(before, f.arrangement, f.track_a, id, -1, f.track_b).ok());
+    CHECK_FALSE(resize_placement(before, f.arrangement, f.track_a, id, 0).ok());
+    CHECK_FALSE(resize_placement(before, f.arrangement, f.track_a, id, -kPpq).ok());
+    CHECK_FALSE(create_track(before, new_id(), "X", std::nullopt).ok());
+    CHECK_FALSE(delete_track(before, new_id(), f.track_a).ok());
+    CHECK(history.read() == before);
+}
+
+TEST_CASE("an Assistant-originated Delta carries its Origin") {
+    auto f = make_fixture();
+    auto created = create_track(f.project, f.arrangement, "Bot", std::nullopt,
+                                Origin::Assistant);
+    REQUIRE(created.ok());
+    CHECK(created->delta.origin == Origin::Assistant);
+
+    auto placed = add_placement(f.project, f.arrangement, f.track_a, f.drum_pattern, 0, 0,
+                                Origin::Assistant);
+    REQUIRE(placed.ok());
+    CHECK(placed->delta.origin == Origin::Assistant);
+}
+
 TEST_CASE("both Pattern kinds place through the same function without special cases") {
     auto f = make_fixture();
     ProjectHistory history(std::move(f.project));
