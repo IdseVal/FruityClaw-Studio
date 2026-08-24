@@ -7,7 +7,8 @@ cmake_minimum_required(VERSION 3.24)
 set(FCS_PRODUCT_NAME "Studio" CACHE STRING "Display name only. Disposable.")
 set(FCS_APP_ID "studio" CACHE STRING "Stable neutral identifier. Never shown to a user.")
 
-project(${FCS_APP_ID} VERSION 0.1.0 LANGUAGES CXX)
+# C is enabled for vendored C dependencies (PortAudio).
+project(${FCS_APP_ID} VERSION 0.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
