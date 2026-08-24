@@ -9,3 +9,6 @@ mail/__pycache__/
 .just-scrape/
 .orca/dispatcher/dispatcher.lock
 .orca/dispatcher/dispatcher.log*
+
+# build output
+build/

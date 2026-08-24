@@ -1,0 +1,58 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "dev-headless",
+      "displayName": "Headless: core, engine and tests only",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/dev-headless",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "FCS_BUILD_UI": "OFF",
+        "FCS_BUILD_AUDIO": "OFF",
+        "FCS_BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "dev",
+      "displayName": "Full debug build",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/dev",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "FCS_BUILD_UI": "ON",
+        "FCS_BUILD_AUDIO": "ON",
+        "FCS_BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "release",
+      "displayName": "Full release build",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "FCS_BUILD_UI": "ON",
+        "FCS_BUILD_AUDIO": "ON",
+        "FCS_BUILD_TESTS": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "dev-headless", "configurePreset": "dev-headless" },
+    { "name": "dev", "configurePreset": "dev" },
+    { "name": "release", "configurePreset": "release" }
+  ],
+  "testPresets": [
+    {
+      "name": "dev-headless",
+      "configurePreset": "dev-headless",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "dev",
+      "configurePreset": "dev",
+      "output": { "outputOnFailure": true }
+    }
+  ]
+}
