@@ -5,5 +5,5 @@ add_executable(app
   demo_project.cpp
 )
 target_compile_definitions(app PRIVATE FCS_PRODUCT_NAME_STR="${FCS_PRODUCT_NAME}")
-target_link_libraries(app PRIVATE core engine audioio ui)
+target_link_libraries(app PRIVATE core engine audioio assistant ui)
 set_target_properties(app PROPERTIES OUTPUT_NAME ${FCS_APP_ID})
