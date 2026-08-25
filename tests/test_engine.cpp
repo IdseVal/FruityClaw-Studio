@@ -180,3 +180,35 @@ TEST_CASE("offline render throughput is comfortably realtime") {
                      << realtime_factor << "x realtime)");
     CHECK(realtime_factor > 10.0);
 }
+
+TEST_CASE("an audition is audible while the transport is stopped and replaces itself") {
+    auto f = make_fixture();
+    SampleSource tone = f.project.samples.items[1].source;  // 0.5 s
+    SampleSource hit = f.project.samples.items[0].source;   // 0.1 s
+    ProjectHistory history(std::move(f.project));
+    engine::Engine player;
+    player.publish(history.read(), kRate);
+
+    // Silent before; nothing is placed and nothing is playing.
+    CHECK(render_blocks(player, 2, 512).back() == 0.0);
+    CHECK_FALSE(player.status().playing);
+
+    player.audition(tone);
+    std::vector<double> loud = render_blocks(player, 4, 512);
+    CHECK(loud.front() > 0.01);
+    CHECK(player.status().position == 0);  // the transport did not move
+
+    // A second cue replaces the first, so a short hit ends the sound early:
+    // 0.1 s is 4800 frames, silence well inside 20 blocks of 512.
+    player.audition(hit);
+    std::vector<double> after = render_blocks(player, 20, 512);
+    CHECK(after.front() > 0.01);
+    CHECK(after.back() == 0.0);
+
+    // Retired cues are reclaimed by epoch, never while they could be playing.
+    for (int i = 0; i < 8; ++i) {
+        player.audition(i % 2 ? tone : hit);
+        render_blocks(player, 1, 64);
+    }
+    CHECK(std::isfinite(render_blocks(player, 1, 512).back()));
+}
