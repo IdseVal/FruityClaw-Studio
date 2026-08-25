@@ -78,7 +78,7 @@ QPixmap thumbnail(const core::Sample& sample, const QColor& colour) {
                            colour);
         }
         if (marked) {
-            provenance::paint_mark(painter, QRect(kThumbWidth - 13, kThumbHeight - 10, 12, 9));
+            paint_provenance_mark(painter, QRect(kThumbWidth - 13, kThumbHeight - 10, 12, 9));
         }
     }
     cache[sample.id] = Cached{marked, pixmap};
@@ -99,7 +99,7 @@ void show_details(const core::Sample& sample, const QColor& colour, QWidget* par
     {
         QPainter painter(&picture);
         if (sample.source) paint_waveform(painter, *sample.source, picture.rect().adjusted(4, 4, -4, -4), colour);
-        if (!sample.provenance.is_human()) provenance::paint_mark(painter, QRect(300, 56, 16, 12));
+        if (!sample.provenance.is_human()) paint_provenance_mark(painter, QRect(300, 56, 16, 12));
     }
     auto* waveform = new QLabel(dialog);
     waveform->setPixmap(picture);
@@ -116,11 +116,11 @@ void show_details(const core::Sample& sample, const QColor& colour, QWidget* par
     auto* details = new QLabel(facts, dialog);
     details->setStyleSheet(QString("color: %1;").arg(theme::kTextSecondary.name()));
 
-    auto* provenance_label = new QLabel(provenance::text(sample.provenance), dialog);
-    provenance_label->setWordWrap(true);
-    provenance_label->setObjectName("provenance");
+    auto* provenance = new QLabel(provenance_text(sample.provenance), dialog);
+    provenance->setWordWrap(true);
+    provenance->setObjectName("provenance");
     if (!sample.provenance.is_human()) {
-        provenance_label->setStyleSheet(QString("color: %1;").arg(theme::kAccent.name()));
+        provenance->setStyleSheet(QString("color: %1;").arg(theme::kAccent.name()));
     }
 
     auto* layout = new QVBoxLayout(dialog);
@@ -128,7 +128,7 @@ void show_details(const core::Sample& sample, const QColor& colour, QWidget* par
     layout->addWidget(name);
     layout->addWidget(waveform);
     layout->addWidget(details);
-    layout->addWidget(provenance_label);
+    layout->addWidget(provenance);
     dialog->show();
 }
 
@@ -229,8 +229,8 @@ void SampleBrowser::reload() {
         item->setData(Qt::UserRole, static_cast<int>(i));
         // The mark must reach a screen reader as well as the eye.
         item->setData(Qt::AccessibleDescriptionRole,
-                      sample.provenance.is_human() ? QString() : QString("AI-generated"));
-        item->setToolTip(provenance::text(sample.provenance));
+                      sample.provenance.is_human() ? QString() : kProvenanceMarkLabel);
+        item->setToolTip(provenance_text(sample.provenance));
         if (keep && *keep == sample.id) {
             list_->setCurrentItem(item);
             item->setSelected(true);

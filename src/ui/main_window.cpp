@@ -14,6 +14,7 @@
 #include "ui/pattern_palette.h"
 #include "ui/record_bar.h"
 #include "ui/sample_browser.h"
+#include "ui/settings_dialog.h"
 #include "ui/step_sequencer.h"
 #include "ui/theme.h"
 
@@ -33,8 +34,9 @@ QLabel* section_header(const QString& text, QWidget* parent) {
 
 MainWindow::MainWindow(core::ProjectHistory& history, core::TransportPort& transport,
                        core::AuditionPort& audition, core::RecorderPort& recorder,
-                       const QString& product_name, QWidget* parent)
-    : QMainWindow(parent), history_(history), transport_(transport) {
+                       assistant::FunctionToggles& toggles, const QString& product_name,
+                       QWidget* parent)
+    : QMainWindow(parent), history_(history), transport_(transport), toggles_(toggles) {
     setWindowTitle(product_name);
     resize(1200, 720);
     setStyleSheet(QString("QMainWindow, QToolBar, QStatusBar { background: %1; "
@@ -106,6 +108,14 @@ MainWindow::MainWindow(core::ProjectHistory& history, core::TransportPort& trans
     auto* redo_button = new QToolButton(bar);
     redo_button->setDefaultAction(redo_action_);
     bar->addWidget(redo_button);
+
+    auto* settings_action = new QAction("Settings", this);
+    settings_action->setShortcut(QKeySequence::Preferences);
+    connect(settings_action, &QAction::triggered, this, [this] { open_settings(); });
+    addAction(settings_action);
+    auto* settings_button = new QToolButton(bar);
+    settings_button->setDefaultAction(settings_action);
+    bar->addWidget(settings_button);
 
     // --- centre: sidebar (Samples over Patterns) | arrangement ---------------
     auto* splitter = new QSplitter(this);
@@ -180,6 +190,12 @@ MainWindow::MainWindow(core::ProjectHistory& history, core::TransportPort& trans
     history_.observe([this] { refresh_undo_redo(); });
     refresh_undo_redo();
     refresh_transport();
+}
+
+void MainWindow::open_settings() {
+    SettingsDialog dialog(toggles_, capabilities_, this);
+    connect(&dialog, &SettingsDialog::toggles_changed, this, &MainWindow::toggles_changed);
+    dialog.exec();
 }
 
 void MainWindow::refresh_transport() {

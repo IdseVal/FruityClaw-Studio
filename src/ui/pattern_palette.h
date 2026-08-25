@@ -2,6 +2,10 @@
 // they carry onto the Arrangement. Clicking a row arms it for placing;
 // clicking it again disarms. Pattern editing itself belongs to the step
 // sequencer and piano roll (issues #9 and #10), not here.
+//
+// AI-generated Patterns carry the section 6.3 provenance mark in the corner
+// of the row's colour swatch, with the full provenance line as the row's
+// tooltip. The mark is derived from Provenance, never stored here.
 #pragma once
 
 #include <QListWidget>

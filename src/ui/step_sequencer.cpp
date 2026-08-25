@@ -378,6 +378,7 @@ StepSequencer::StepSequencer(core::ProjectHistory& history, QWidget* parent)
 
     badge_ = new QLabel("AI", this);
     badge_->setObjectName("provenance_badge");
+    badge_->setAccessibleName(kProvenanceMarkLabel);
     badge_->setStyleSheet(QString("background: %1; color: %2; font-size: 9px; font-weight: 700;"
                                   " padding: 2px 4px; border-radius: 3px;")
                               .arg(theme::kAccent.name(), theme::kCanvas.name()));
@@ -420,7 +421,7 @@ void StepSequencer::set_pattern(std::optional<core::Id> pattern) {
     grid_->set_pattern(pattern);
     reload();
     if (const core::Pattern* pat = pattern ? history_.read().patterns.find(*pattern) : nullptr) {
-        if (!pat->provenance.is_human()) emit hint_changed(provenance::text(pat->provenance));
+        if (!pat->provenance.is_human()) emit hint_changed(provenance_text(pat->provenance));
     }
 }
 
@@ -446,8 +447,8 @@ void StepSequencer::reload() {
     // Section 6.3: "when it is opened up" — the mark sits beside the name.
     bool generated = pat && !pat->provenance.is_human();
     badge_->setVisible(generated);
-    badge_->setToolTip(pat ? provenance::text(pat->provenance) : QString());
-    name_->setAccessibleDescription(generated ? "AI-generated" : QString());
+    badge_->setToolTip(pat ? provenance_text(pat->provenance) : QString());
+    name_->setAccessibleDescription(generated ? kProvenanceMarkLabel : QString());
 }
 
 void StepSequencer::add_pattern() {
