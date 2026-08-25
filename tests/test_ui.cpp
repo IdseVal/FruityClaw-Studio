@@ -691,6 +691,29 @@ TEST_CASE("the offer says plainly what the key is for and that declining loses n
     CHECK(f.save->text() == "Save key");
 }
 
+TEST_CASE("reopened with a key already saved, the dialog says so and keeps it on decline") {
+    StubKeys keys;
+    keys.stored = "sk-already-here";
+    ui::AssistantKeyDialog dialog{keys};
+    dialog.show();
+    (void)QTest::qWaitForWindowExposed(&dialog);
+    QLabel* saved = dialog.findChild<QLabel*>("assistant_key_saved");
+    REQUIRE(saved);
+    CHECK(saved->text() == "A key is saved. Paste a new one to replace it.");
+    CHECK_FALSE(all_label_text(dialog).contains("sk-already-here"));
+    QPushButton* decline = dialog.findChild<QPushButton*>("assistant_key_decline");
+    REQUIRE(decline);
+    CHECK(decline->text() == "Keep the saved key");
+    QTest::mouseClick(decline, Qt::LeftButton);
+    CHECK(keys.stored == "sk-already-here");
+    CHECK(keys.store_calls == 0);
+}
+
+TEST_CASE("on first open nothing claims a key is saved") {
+    DialogFixture f;
+    CHECK(f.dialog.findChild<QLabel*>("assistant_key_saved") == nullptr);
+}
+
 TEST_CASE("declining stores nothing and records the offer, so it is never repeated") {
     DialogFixture f;
     QTest::mouseClick(f.decline, Qt::LeftButton);

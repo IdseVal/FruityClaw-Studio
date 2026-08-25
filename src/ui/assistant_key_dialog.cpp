@@ -61,6 +61,16 @@ AssistantKeyDialog::AssistantKeyDialog(core::AssistantKeyPort& keys, QWidget* pa
     key_field_->setAccessibleName("API key");
     layout->addWidget(key_field_);
 
+    // Reached again from the Studio menu: say that a key is already kept, so
+    // the user is not left wondering whether the first save took.
+    const bool has_key = keys_.has_key();
+    if (has_key) {
+        auto* saved = new QLabel("A key is saved. Paste a new one to replace it.", this);
+        saved->setObjectName("assistant_key_saved");
+        saved->setStyleSheet(QString("color: %1;").arg(theme::kAccent.name()));
+        layout->addWidget(saved);
+    }
+
     auto* note = new QLabel(
         "Kept on this machine for your account only. Never shown again, never written "
         "to a log. Add or change it later from Studio ▸ Assistant key.",
@@ -80,7 +90,7 @@ AssistantKeyDialog::AssistantKeyDialog(core::AssistantKeyPort& keys, QWidget* pa
     // Two answers of equal weight: declining is first-class (core document
     // 1.1a), so it gets a real button, not a link in the corner.
     auto* buttons = new QHBoxLayout;
-    auto* decline = new QPushButton("Continue without a key", this);
+    auto* decline = new QPushButton(has_key ? "Keep the saved key" : "Continue without a key", this);
     decline->setObjectName("assistant_key_decline");
     decline->setAutoDefault(false);
     connect(decline, &QPushButton::clicked, this, &QDialog::reject);
