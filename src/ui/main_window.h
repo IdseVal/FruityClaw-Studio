@@ -1,7 +1,7 @@
-// The main window shell around the Arrangement view: transport bar with
+// The main window shell around the editing surfaces: transport bar with
 // play/stop, position readout, tempo, the recording controls, undo/redo
-// driven by the History, and the sidebar — Samples above Patterns — on the
-// left.
+// driven by the History; the sidebar — Samples above Patterns — on the
+// left; the Arrangement view above the step sequencer in the centre.
 #pragma once
 
 #include <QMainWindow>
@@ -18,6 +18,7 @@ class ArrangementView;
 class PatternPalette;
 class RecordBar;
 class SampleBrowser;
+class StepSequencer;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -37,6 +38,7 @@ private:
     ArrangementView* arrangement_view_ = nullptr;
     PatternPalette* palette_ = nullptr;
     SampleBrowser* samples_ = nullptr;
+    StepSequencer* sequencer_ = nullptr;
     RecordBar* record_bar_ = nullptr;
     QToolButton* play_button_ = nullptr;
     QLabel* position_label_ = nullptr;

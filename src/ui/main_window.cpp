@@ -14,6 +14,7 @@
 #include "ui/pattern_palette.h"
 #include "ui/record_bar.h"
 #include "ui/sample_browser.h"
+#include "ui/step_sequencer.h"
 #include "ui/theme.h"
 
 namespace ui {
@@ -35,7 +36,7 @@ MainWindow::MainWindow(core::ProjectHistory& history, core::TransportPort& trans
                        const QString& product_name, QWidget* parent)
     : QMainWindow(parent), history_(history), transport_(transport) {
     setWindowTitle(product_name);
-    resize(1200, 640);
+    resize(1200, 720);
     setStyleSheet(QString("QMainWindow, QToolBar, QStatusBar { background: %1; "
                           "color: %2; border: none; }"
                           "QToolButton { color: %2; background: transparent; "
@@ -130,9 +131,24 @@ MainWindow::MainWindow(core::ProjectHistory& history, core::TransportPort& trans
     sidebar->addWidget(patterns_section);
     sidebar->setSizes({360, 240});
 
-    arrangement_view_ = new ArrangementView(history_, transport_, splitter);
+    // Centre: the Arrangement over the step sequencer.
+    auto* centre = new QSplitter(Qt::Vertical, splitter);
+    arrangement_view_ = new ArrangementView(history_, transport_, centre);
+    auto* sequencer_section = new QWidget(centre);
+    sequencer_ = new StepSequencer(history_, sequencer_section);
+    auto* sequencer_layout = new QVBoxLayout(sequencer_section);
+    sequencer_layout->setContentsMargins(0, 0, 0, 0);
+    sequencer_layout->setSpacing(0);
+    sequencer_layout->addWidget(section_header("Step sequencer", sequencer_section));
+    sequencer_layout->addWidget(sequencer_, 1);
+    centre->addWidget(arrangement_view_);
+    centre->addWidget(sequencer_section);
+    centre->setStretchFactor(0, 1);
+    centre->setStretchFactor(1, 0);
+    centre->setSizes({340, 220});
+
     splitter->addWidget(sidebar);
-    splitter->addWidget(arrangement_view_);
+    splitter->addWidget(centre);
     splitter->setStretchFactor(0, 0);
     splitter->setStretchFactor(1, 1);
     splitter->setSizes({220, 980});
@@ -141,13 +157,19 @@ MainWindow::MainWindow(core::ProjectHistory& history, core::TransportPort& trans
     connect(samples_, &SampleBrowser::hint_changed, this,
             [this](const QString& hint) { statusBar()->showMessage(hint); });
 
-    connect(palette_, &PatternPalette::armed_changed, this,
-            [this] { arrangement_view_->set_armed_pattern(palette_->armed()); });
+    // Arming a Pattern for placing also opens it in the sequencer, so one
+    // click both picks what goes on the timeline and what is being edited.
+    connect(palette_, &PatternPalette::armed_changed, this, [this] {
+        arrangement_view_->set_armed_pattern(palette_->armed());
+        if (palette_->armed()) sequencer_->set_pattern(palette_->armed());
+    });
+    connect(sequencer_, &StepSequencer::hint_changed, this,
+            [this](const QString& hint) { statusBar()->showMessage(hint); });
     connect(arrangement_view_, &ArrangementView::hint_changed, this,
             [this](const QString& hint) { statusBar()->showMessage(hint); });
 
     statusBar()->showMessage(
-        "Click a Pattern on the left, then click a lane to place it. Space plays.");
+        "Click a Pattern on the left to open and arm it; click a lane to place it. Space plays.");
 
     // --- polling ------------------------------------------------------------
     auto* timer = new QTimer(this);

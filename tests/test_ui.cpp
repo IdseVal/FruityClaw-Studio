@@ -3,8 +3,10 @@
 // geometry and hit-testing, drag commit atomicity, rename-editor failure
 // routing, MainWindow's undo/redo and transport bindings, the Sample
 // sidebar (issue #12): audition, provenance mark, placing into a Pattern,
-// and the recording controls (issue #14): input choice, record/stop, the
-// take landing in the Project as a Human Sample.
+// the recording controls (issue #14): input choice, record/stop, the take
+// landing in the Project as a Human Sample, and the step sequencer
+// (issue #9): drawing, painting, erasing and velocity as single undo
+// entries, lane mute, new Pattern, rename, and the provenance mark.
 //
 // Runs on the offscreen platform; simulated input only. The tests replicate
 // the view's layout constants (header 160 px, ruler 28 px, track 56 px,
@@ -24,15 +26,20 @@
 #include <QSignalSpy>
 #include <QToolButton>
 #include <QtTest/QtTest>
+#include <algorithm>
 
 #include "core/arrangement_functions.h"
+#include "core/pattern_functions.h"
+#include "core/sample_functions.h"
 #include "core/history.h"
 #include "core/playback.h"
 #include "test_support.h"
 #include "ui/arrangement_view.h"
 #include "ui/main_window.h"
 #include "ui/record_bar.h"
+#include "ui/pattern_palette.h"
 #include "ui/sample_browser.h"
+#include "ui/step_sequencer.h"
 
 using namespace core;
 using namespace core::functions;
@@ -706,4 +713,252 @@ TEST_CASE("recording with no input chosen is refused with a hint") {
     QTest::keyClick(&f.bar, Qt::Key_R);
     CHECK_FALSE(f.recorder.recording);
     CHECK(f.history.read().samples.items.size() == 2);
+}
+
+// ---------------------------------------------------------------------------
+// Step sequencer (issue #9)
+
+namespace {
+
+// Layout constants mirrored from step_sequencer.cpp.
+constexpr int kLaneHeaderWidth = 140;
+constexpr int kRowHeight = 30;
+constexpr int kFooterHeight = 26;
+
+// The sequencer over the fixture plus one AI-generated Pattern (section 6.3).
+// The fixture's drum lane has steps 0, 4, 8, 12 on at velocity 100.
+struct SequencerFixture {
+    test_support::Fixture ids = make_fixture();
+    Id generated_pattern;
+    ProjectHistory history;
+    ui::StepSequencer sequencer;
+    ui::StepGrid* grid = nullptr;
+    QSignalSpy hints;
+
+    static Project with_generated(Project project, Id& id) {
+        Pattern generated;
+        generated.id = new_id();
+        generated.name = "Machine beat";
+        generated.provenance = Provenance::generated("test-model", 1700000000);
+        id = generated.id;
+        project.patterns.items.push_back(generated);
+        return project;
+    }
+
+    SequencerFixture()
+        : history(with_generated(std::move(ids.project), generated_pattern)),
+          sequencer(history), hints(&sequencer, &ui::StepSequencer::hint_changed) {
+        sequencer.resize(800, 300);
+        sequencer.show();
+        (void)QTest::qWaitForWindowExposed(&sequencer);
+        grid = sequencer.grid();
+        REQUIRE(grid);
+        REQUIRE(sequencer.pattern() == ids.drum_pattern);  // opens the first Pattern
+    }
+
+    int cell_width() const {
+        return std::clamp((grid->width() - kLaneHeaderWidth) / 16, 22, 44);
+    }
+    QPoint cell(int lane, int step) const {
+        return QPoint(kLaneHeaderWidth + step * cell_width() + cell_width() / 2,
+                      lane * kRowHeight + kRowHeight / 2);
+    }
+    const Part& drum_lane() const {
+        return history.read().patterns.find(ids.drum_pattern)->parts[0];
+    }
+    std::vector<int> steps() const {
+        std::vector<int> on;
+        for (const Event& e : drum_lane().events)
+            on.push_back(static_cast<int>(e.start / kStepTicks));
+        std::sort(on.begin(), on.end());
+        return on;
+    }
+    QString last_hint() const {
+        return hints.isEmpty() ? QString() : hints.last().at(0).toString();
+    }
+};
+
+}  // namespace
+
+TEST_CASE("clicking a step draws it, clicking again erases it, one entry each") {
+    SequencerFixture f;
+    Project before = f.history.read();
+
+    QTest::mouseClick(f.grid, Qt::LeftButton, {}, f.cell(0, 1));
+    CHECK(f.steps() == std::vector<int>{0, 1, 4, 8, 12});
+    CHECK(f.drum_lane().events.back().velocity == 100);
+    CHECK(f.history.state().undo_label == "Draw steps of 'Drum' in 'Drums A'");
+    // The lane and the other Pattern are otherwise as they were.
+    CHECK(f.drum_lane().instrument ==
+          before.patterns.find(f.ids.drum_pattern)->parts[0].instrument);
+    CHECK(*f.history.read().patterns.find(f.ids.melody_pattern) ==
+          *before.patterns.find(f.ids.melody_pattern));
+
+    QTest::mouseClick(f.grid, Qt::LeftButton, {}, f.cell(0, 1));
+    CHECK(f.steps() == std::vector<int>{0, 4, 8, 12});
+    CHECK(f.history.state().undo_label == "Erase steps of 'Drum' in 'Drums A'");
+
+    REQUIRE(f.history.undo());
+    REQUIRE(f.history.undo());
+    CHECK(f.history.read() == before);
+    CHECK_FALSE(f.history.state().can_undo);
+}
+
+TEST_CASE("a drag paints along the row and lands as one undo entry") {
+    SequencerFixture f;
+    Project before = f.history.read();
+
+    QTest::mousePress(f.grid, Qt::LeftButton, {}, f.cell(0, 1));
+    drag_to(*f.grid, f.cell(0, 2));
+    drag_to(*f.grid, f.cell(1, 3));  // straying off the row keeps painting row 0
+    QTest::mouseRelease(f.grid, Qt::LeftButton, {}, f.cell(1, 3));
+    CHECK(f.steps() == std::vector<int>{0, 1, 2, 3, 4, 8, 12});
+    CHECK(f.history.state().undo_label == "Draw steps of 'Drum' in 'Drums A'");
+
+    REQUIRE(f.history.undo());
+    CHECK(f.history.read() == before);
+    CHECK_FALSE(f.history.state().can_undo);
+}
+
+TEST_CASE("the right button erases and the velocity of surviving steps is kept") {
+    SequencerFixture f;
+    QTest::mouseClick(f.grid, Qt::RightButton, {}, f.cell(0, 0));
+    CHECK(f.steps() == std::vector<int>{4, 8, 12});
+    CHECK(f.history.state().undo_label == "Erase steps of 'Drum' in 'Drums A'");
+    for (const Event& e : f.drum_lane().events) CHECK(e.velocity == 100);
+
+    // Right-clicking a step that is already off changes nothing and records nothing.
+    QTest::mouseClick(f.grid, Qt::RightButton, {}, f.cell(0, 1));
+    CHECK(f.steps() == std::vector<int>{4, 8, 12});
+    REQUIRE(f.history.undo());
+    CHECK_FALSE(f.history.state().can_undo);
+}
+
+TEST_CASE("Shift-drag sets one step's velocity as one entry") {
+    SequencerFixture f;
+    Project before = f.history.read();
+
+    QTest::mousePress(f.grid, Qt::LeftButton, Qt::ShiftModifier, f.cell(0, 0));
+    drag_to(*f.grid, f.cell(0, 0) - QPoint(0, 10));
+    drag_to(*f.grid, f.cell(0, 0) - QPoint(0, 60));  // past 127: clamped
+    QTest::mouseRelease(f.grid, Qt::LeftButton, Qt::ShiftModifier,
+                        f.cell(0, 0) - QPoint(0, 60));
+    CHECK(f.drum_lane().events[0].velocity == 127);
+    CHECK(f.steps() == std::vector<int>{0, 4, 8, 12});
+    CHECK(f.history.state().undo_label == "Set velocity of 'Drum' in 'Drums A'");
+    CHECK(f.last_hint() == "Velocity 127");
+
+    // Shift on a step that is off is a hint, not a mutation.
+    QTest::mousePress(f.grid, Qt::LeftButton, Qt::ShiftModifier, f.cell(0, 1));
+    QTest::mouseRelease(f.grid, Qt::LeftButton, Qt::ShiftModifier, f.cell(0, 1));
+    CHECK(f.steps() == std::vector<int>{0, 4, 8, 12});
+    CHECK(f.last_hint().startsWith("Shift-drag a step that is on"));
+
+    REQUIRE(f.history.undo());
+    CHECK(f.history.read() == before);
+    CHECK_FALSE(f.history.state().can_undo);
+}
+
+TEST_CASE("the row's dot mutes the lane through set_part_muted") {
+    SequencerFixture f;
+    QPoint dot(kLaneHeaderWidth - 13, kRowHeight / 2);
+    QTest::mouseClick(f.grid, Qt::LeftButton, {}, dot);
+    CHECK(f.drum_lane().muted);
+    CHECK(f.history.state().undo_label == "Mute 'Drum' in 'Drums A'");
+    QTest::mouseClick(f.grid, Qt::LeftButton, {}, dot);
+    CHECK_FALSE(f.drum_lane().muted);
+    // The rest of the header is inert.
+    QTest::mouseClick(f.grid, Qt::LeftButton, {}, QPoint(20, kRowHeight / 2));
+    CHECK(f.history.state().undo_label == "Unmute 'Drum' in 'Drums A'");
+}
+
+TEST_CASE("+ Pattern adds an empty one-bar Pattern and opens it for naming") {
+    SequencerFixture f;
+    auto* add = f.sequencer.findChild<QToolButton*>();
+    auto* name = f.sequencer.findChild<QLineEdit*>();
+    REQUIRE(add);
+    REQUIRE(name);
+
+    QTest::mouseClick(add, Qt::LeftButton);
+    const auto& patterns = f.history.read().patterns.items;
+    REQUIRE(patterns.size() == 4);
+    CHECK(patterns.back().name == "Pattern 4");
+    CHECK(patterns.back().length == 4 * kPpq);
+    CHECK(patterns.back().parts.empty());
+    CHECK(patterns.back().provenance.is_human());
+    CHECK(f.sequencer.pattern() == patterns.back().id);
+    CHECK(name->text() == "Pattern 4");
+    CHECK(f.history.state().undo_label == "Add Pattern 'Pattern 4'");
+
+    // Undoing the creation closes it: the grid cannot show a Pattern that is gone.
+    REQUIRE(f.history.undo());
+    CHECK_FALSE(f.sequencer.pattern().has_value());
+}
+
+TEST_CASE("the name field renames through rename_pattern and refuses an empty name") {
+    SequencerFixture f;
+    auto* name = f.sequencer.findChild<QLineEdit*>();
+    REQUIRE(name);
+    CHECK(name->text() == "Drums A");
+
+    name->setText("Beat");
+    emit name->editingFinished();
+    CHECK(f.history.read().patterns.find(f.ids.drum_pattern)->name == "Beat");
+    CHECK(f.history.state().undo_label == "Rename Pattern to 'Beat'");
+
+    name->setText("   ");
+    emit name->editingFinished();
+    CHECK(f.history.read().patterns.find(f.ids.drum_pattern)->name == "Beat");
+    CHECK(name->text() == "Beat");
+    CHECK(f.last_hint() == "A Pattern needs a name");
+
+    // The same name again is not an entry.
+    emit name->editingFinished();
+    REQUIRE(f.history.undo());
+    CHECK_FALSE(f.history.state().can_undo);
+    CHECK(name->text() == "Drums A");
+}
+
+TEST_CASE("only an AI-generated Pattern carries the mark, in the sequencer and the palette") {
+    SequencerFixture f;
+    auto* badge = f.sequencer.findChild<QLabel*>("provenance_badge");
+    auto* name = f.sequencer.findChild<QLineEdit*>();
+    REQUIRE(badge);
+    REQUIRE(name);
+    CHECK_FALSE(badge->isVisible());
+    CHECK(name->accessibleDescription().isEmpty());
+
+    f.sequencer.set_pattern(f.generated_pattern);
+    CHECK(badge->isVisible());
+    CHECK(badge->toolTip().contains("test-model"));
+    CHECK(badge->toolTip().contains("may not be licenseable"));
+    CHECK(name->accessibleDescription() == "AI-generated");
+    CHECK(f.last_hint().contains("AI-generated by test-model"));
+
+    f.sequencer.set_pattern(f.ids.drum_pattern);
+    CHECK_FALSE(badge->isVisible());
+
+    ui::PatternPalette palette(f.history);
+    REQUIRE(palette.count() == 3);
+    CHECK(palette.item(0)->data(Qt::AccessibleDescriptionRole).toString().isEmpty());
+    CHECK(palette.item(2)->data(Qt::AccessibleDescriptionRole).toString() == "AI-generated");
+    CHECK(palette.item(2)->toolTip().contains("test-model"));
+    CHECK(palette.item(0)->toolTip() == "Made by hand");
+}
+
+TEST_CASE("the sequencer follows the History: a lane placed from the sidebar appears") {
+    SequencerFixture f;
+    Id keys = f.history.read().instruments.items[1].id;
+    auto added = core::functions::add_part(f.history.read(), f.ids.drum_pattern, keys);
+    REQUIRE(f.history.apply(std::move(added->delta)) == ApplyResult::Applied);
+    CHECK(f.grid->sizeHint().height() == 2 * kRowHeight + kFooterHeight);
+
+    // Drawing on the new row touches only that row.
+    QTest::mouseClick(f.grid, Qt::LeftButton, {}, f.cell(1, 6));
+    const Pattern* drums = f.history.read().patterns.find(f.ids.drum_pattern);
+    REQUIRE(drums->parts.size() == 2);
+    CHECK(drums->parts[1].events.size() == 1);
+    CHECK(drums->parts[1].events[0].start == 6 * kStepTicks);
+    CHECK(f.steps() == std::vector<int>{0, 4, 8, 12});
+    CHECK(f.history.state().undo_label == "Draw steps of 'Keys' in 'Drums A'");
 }
