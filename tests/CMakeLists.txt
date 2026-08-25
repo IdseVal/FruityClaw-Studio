@@ -26,7 +26,10 @@ catch_discover_tests(core_tests)
 if(TARGET ui)
   find_package(Qt6 COMPONENTS Test QUIET)
   if(Qt6Test_FOUND)
-    add_executable(ui_tests test_ui.cpp)
+    # toggle_file.cpp is the composition root's persistence for the toggle
+    # store; it is compiled in here so its load/save round trip is tested
+    # against a QStandardPaths test-mode directory, never the real config.
+    add_executable(ui_tests test_ui.cpp ${CMAKE_SOURCE_DIR}/src/app/toggle_file.cpp)
     target_link_libraries(ui_tests PRIVATE ui Catch2::Catch2 Qt6::Test)
     # Qt's DLLs are not on PATH on Windows; point discovery and the tests at
     # the installed Qt bin directory.

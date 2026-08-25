@@ -26,8 +26,12 @@
 #include <QtTest/QtTest>
 
 #include <QCheckBox>
+#include <QDir>
 #include <QFrame>
+#include <QStandardPaths>
 #include <QTabWidget>
+
+#include "app/toggle_file.h"
 
 #include "assistant/registry.h"
 #include "core/arrangement_functions.h"
@@ -738,6 +742,95 @@ TEST_CASE("MainWindow offers a Settings action with the platform preferences sho
         if (action->text() == "Settings") settings = action;
     REQUIRE(settings);
     CHECK(settings->shortcut() == QKeySequence(QKeySequence::Preferences));
+}
+
+TEST_CASE("re-enabling one Rework row from a closed privacy floor changes only that row") {
+    // The store closed the floor with one explicit off; the other two Rework
+    // rows show off by the section 4.3 default. Clicking one of them on
+    // must not re-open the third through the same default.
+    assistant::FunctionToggles toggles =
+        assistant::FunctionToggles::from_text("rework_pattern=off\n");
+    ui::FunctionSwitchboard board(toggles, {});
+    QSignalSpy changed(&board, &ui::FunctionSwitchboard::changed);
+    board.show();
+    (void)QTest::qWaitForWindowExposed(&board);
+    REQUIRE(board.file().local_only());
+
+    board.findChild<QCheckBox*>("continue_pattern")->click();
+    CHECK(changed.count() == 1);
+    CHECK(board.file().rework_count == 1);
+    CHECK(board.findChild<QCheckBox*>("continue_pattern")->isChecked());
+    CHECK_FALSE(board.findChild<QCheckBox*>("describe_pattern")->isChecked());
+    CHECK_FALSE(board.findChild<QCheckBox*>("rework_pattern")->isChecked());
+    // What was shown is now recorded, so a later build reads the same file.
+    CHECK(toggles.to_text() ==
+          "continue_pattern=on\ndescribe_pattern=off\nrework_pattern=off\n");
+    CHECK(assistant::build(assistant::registry(), toggles, {}).rework_count == 1);
+}
+
+// ---------------------------------------------------------------------------
+// The toggle file (src/app/toggle_file.cpp): persistence between sessions
+
+namespace {
+
+// Points QStandardPaths at a scratch tree and starts from no file at all.
+struct ToggleFileFixture {
+    ToggleFileFixture() {
+        QStandardPaths::setTestModeEnabled(true);
+        QCoreApplication::setApplicationName("fcs_toggle_file_test");
+        QDir(QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation))
+            .removeRecursively();
+    }
+    ~ToggleFileFixture() {
+        QDir(QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation))
+            .removeRecursively();
+        QStandardPaths::setTestModeEnabled(false);
+    }
+};
+
+}  // namespace
+
+TEST_CASE("the toggle file is an empty store until something is saved") {
+    ToggleFileFixture fx;
+    assistant::FunctionToggles loaded = app::load_toggles();
+    CHECK_FALSE(loaded.state("rework_pattern").has_value());
+    CHECK(loaded.to_text().empty());
+    CHECK(assistant::build(assistant::registry(), loaded, {}).entries.size() == 41);
+}
+
+TEST_CASE("the toggle file round-trips the store and the last save wins") {
+    ToggleFileFixture fx;
+    assistant::FunctionToggles toggles;
+    toggles.set_enabled("rework_pattern", false);
+    toggles.set_enabled("set_tempo", false);
+    REQUIRE(app::save_toggles(toggles));
+
+    assistant::FunctionToggles first = app::load_toggles();
+    CHECK(first.to_text() == "rework_pattern=off\nset_tempo=off\n");
+    CHECK(first.state("rework_pattern") == false);
+    // Section 4.3 survives the round trip: the floor stays closed.
+    CHECK(assistant::build(assistant::registry(), first, {}).local_only());
+
+    // A second save replaces the file rather than appending to it.
+    toggles.set_enabled("set_tempo", true);
+    toggles.set_enabled("rework_pattern", true);
+    REQUIRE(app::save_toggles(toggles));
+    assistant::FunctionToggles second = app::load_toggles();
+    CHECK(second.to_text() == "rework_pattern=on\nset_tempo=on\n");
+    CHECK_FALSE(assistant::build(assistant::registry(), second, {}).local_only());
+}
+
+TEST_CASE("a hand-edited toggle file loads what parses and drops the rest") {
+    ToggleFileFixture fx;
+    QString dir = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
+    REQUIRE(QDir().mkpath(dir));
+    QFile file(dir + "/assistant_functions.txt");
+    REQUIRE(file.open(QIODevice::WriteOnly));
+    file.write("describe_pattern=off\r\nnot a line\n../x=off\nset_tempo=off\n");
+    file.close();
+
+    assistant::FunctionToggles loaded = app::load_toggles();
+    CHECK(loaded.to_text() == "describe_pattern=off\nset_tempo=off\n");
 }
 
 int main(int argc, char** argv) {
