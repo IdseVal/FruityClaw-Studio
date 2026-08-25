@@ -307,7 +307,7 @@ TEST_CASE("MainWindow's undo and redo actions follow HistoryState") {
     ProjectHistory history(std::move(ids.project));
     StubTransport transport;
     StubAudition audition;
-    ui::MainWindow window(history, transport, audition, "Test");
+    ui::MainWindow window(history, transport, audition, nullptr, "Test");
     window.show();
     (void)QTest::qWaitForWindowExposed(&window);
 
@@ -345,7 +345,7 @@ TEST_CASE("MainWindow's transport poll reflects the port's status") {
     ProjectHistory history(std::move(ids.project));
     StubTransport transport;
     StubAudition audition;
-    ui::MainWindow window(history, transport, audition, "Test");
+    ui::MainWindow window(history, transport, audition, nullptr, "Test");
     window.show();
     (void)QTest::qWaitForWindowExposed(&window);
 

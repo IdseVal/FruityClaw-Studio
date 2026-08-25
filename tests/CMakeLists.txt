@@ -27,7 +27,7 @@ catch_discover_tests(core_tests)
 if(TARGET ui)
   find_package(Qt6 COMPONENTS Test QUIET)
   if(Qt6Test_FOUND)
-    add_executable(ui_tests test_ui.cpp)
+    add_executable(ui_tests test_ui.cpp test_assistant_panel.cpp)
     target_link_libraries(ui_tests PRIVATE ui Catch2::Catch2 Qt6::Test)
     # Qt's DLLs are not on PATH on Windows; point discovery and the tests at
     # the installed Qt bin directory.

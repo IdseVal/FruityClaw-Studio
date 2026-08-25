@@ -5,6 +5,7 @@
 #include <memory>
 
 #include "app/demo_project.h"
+#include "assistant/session.h"
 #include "audioio/portaudio_device.h"
 #include "core/history.h"
 #include "engine/engine.h"
@@ -65,7 +66,13 @@ int main(int argc, char** argv) {
         player.publish(history.read(), sample_rate);
     });
 
-    ui::MainWindow window(history, player, player, FCS_PRODUCT_NAME_STR);
+    // No LLM provider is wired yet: which provider(s) the Studio supports is
+    // issue #4, and the first-open key prompt is #18. Until an adapter exists
+    // the Assistant panel says a key is required and the Studio stands on
+    // its own (core document 1.1a).
+    assistant::AssistantSession* session = nullptr;
+
+    ui::MainWindow window(history, player, player, session, FCS_PRODUCT_NAME_STR);
     window.show();
 
     int result = qt_app.exec();

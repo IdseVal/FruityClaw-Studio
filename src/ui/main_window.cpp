@@ -11,6 +11,7 @@
 #include <QToolButton>
 
 #include "ui/arrangement_view.h"
+#include "ui/assistant_panel.h"
 #include "ui/pattern_palette.h"
 #include "ui/sample_browser.h"
 #include "ui/theme.h"
@@ -30,11 +31,11 @@ QLabel* section_header(const QString& text, QWidget* parent) {
 }  // namespace
 
 MainWindow::MainWindow(core::ProjectHistory& history, core::TransportPort& transport,
-                       core::AuditionPort& audition, const QString& product_name,
-                       QWidget* parent)
+                       core::AuditionPort& audition, assistant::AssistantSession* session,
+                       const QString& product_name, QWidget* parent)
     : QMainWindow(parent), history_(history), transport_(transport) {
     setWindowTitle(product_name);
-    resize(1200, 640);
+    resize(1280, 640);
     setStyleSheet(QString("QMainWindow, QToolBar, QStatusBar { background: %1; "
                           "color: %2; border: none; }"
                           "QToolButton { color: %2; background: transparent; "
@@ -100,7 +101,7 @@ MainWindow::MainWindow(core::ProjectHistory& history, core::TransportPort& trans
     redo_button->setDefaultAction(redo_action_);
     bar->addWidget(redo_button);
 
-    // --- centre: sidebar (Samples over Patterns) | arrangement ---------------
+    // --- centre: sidebar (Samples over Patterns) | arrangement | Assistant ----
     auto* splitter = new QSplitter(this);
 
     auto* sidebar = new QSplitter(Qt::Vertical, splitter);
@@ -125,11 +126,31 @@ MainWindow::MainWindow(core::ProjectHistory& history, core::TransportPort& trans
     sidebar->setSizes({360, 240});
 
     arrangement_view_ = new ArrangementView(history_, transport_, splitter);
+
+    // The focused Pattern is the armed one; the Assistant's Focused Selector
+    // resolves to it.
+    auto* assistant_section = new QWidget(splitter);
+    assistant_ = new AssistantPanel(
+        history_, session,
+        [this] {
+            assistant::Focus focus;
+            focus.pattern = palette_->armed();
+            return focus;
+        },
+        assistant_section);
+    auto* assistant_layout = new QVBoxLayout(assistant_section);
+    assistant_layout->setContentsMargins(0, 0, 0, 0);
+    assistant_layout->setSpacing(0);
+    assistant_layout->addWidget(section_header("Assistant", assistant_section));
+    assistant_layout->addWidget(assistant_, 1);
+
     splitter->addWidget(sidebar);
     splitter->addWidget(arrangement_view_);
+    splitter->addWidget(assistant_section);
     splitter->setStretchFactor(0, 0);
     splitter->setStretchFactor(1, 1);
-    splitter->setSizes({220, 980});
+    splitter->setStretchFactor(2, 0);
+    splitter->setSizes({220, 720, 260});
     setCentralWidget(splitter);
 
     connect(samples_, &SampleBrowser::hint_changed, this,
