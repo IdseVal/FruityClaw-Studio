@@ -237,3 +237,35 @@ TEST_CASE("remove_part takes one lane out and undo puts it back in place") {
     history.undo();
     CHECK(history.read() == with_two_lanes);
 }
+
+TEST_CASE("create_pattern sizes the Pattern by the Project's time signature") {
+    auto f = make_fixture();
+    f.project.time_signature = {3, 4};
+    ProjectHistory history(f.project);
+
+    auto result = create_pattern(history.read(), "Waltz", 2);
+    REQUIRE(result.ok());
+    REQUIRE(history.apply(result->delta) == ApplyResult::Applied);
+    const Pattern* created = history.read().patterns.find(result->id);
+    REQUIRE(created);
+    CHECK(created->length == 2 * 3 * kPpq);
+    // 24 sixteenths: step 24 is beyond the Pattern, step 23 is its last.
+    Part lane;
+    lane.id = new_id();
+    Project probe = history.read();
+    probe.patterns.find(result->id)->parts.push_back(lane);
+    CHECK(set_part_steps(probe, result->id, lane.id, {24}).error == "'Waltz' has 24 steps");
+    CHECK(set_part_steps(probe, result->id, lane.id, {23}).ok());
+}
+
+TEST_CASE("set_part_steps with the grid already in place is a no-op, not an entry") {
+    auto f = make_fixture();
+    ProjectHistory history(f.project);
+    Id part = history.read().patterns.find(f.drum_pattern)->parts[0].id;
+
+    auto same = set_part_steps(history.read(), f.drum_pattern, part, {12, 8, 4, 0});
+    REQUIRE(same.ok());
+    CHECK(history.apply(*same) == ApplyResult::NoChange);
+    CHECK(history.read() == f.project);
+    CHECK_FALSE(history.state().can_undo);
+}
