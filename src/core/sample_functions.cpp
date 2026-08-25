@@ -11,6 +11,11 @@ Pattern& pattern_or_throw(Project& p, Id pattern) {
     throw OpError("Pattern not found: " + to_string(pattern));
 }
 
+Instrument& instrument_or_throw(Project& p, Id instrument) {
+    if (Instrument* inst = p.instruments.find(instrument)) return *inst;
+    throw OpError("Instrument not found: " + to_string(instrument));
+}
+
 std::size_t entity_bytes(const Instrument& i) {
     return sizeof(Instrument) + i.name.size() + i.chain.size() * sizeof(Effect);
 }
@@ -129,6 +134,25 @@ Expected<CreatedDelta> add_part(const Project& project, Id pattern, Id instrumen
     Id id = part.id;
     delta.ops.push_back(insert_part_op(pattern, std::move(part), pat->parts.size()));
     return Expected<CreatedDelta>::success({std::move(delta), id});
+}
+
+Expected<Delta> set_instrument_sample(const Project& project, Id instrument, Id sample,
+                                      Origin origin) {
+    const Instrument* inst = project.instruments.find(instrument);
+    if (!inst) return Expected<Delta>::failure("No such Instrument");
+    const Sample* smp = project.samples.find(sample);
+    if (!smp) return Expected<Delta>::failure("No such Sample");
+
+    Delta delta;
+    delta.label = "Give '" + inst->name + "' the Sample '" + smp->name + "'";
+    delta.origin = origin;
+    delta.ops.push_back(make_set<Id>(
+        [instrument](Project& p) { return instrument_or_throw(p, instrument).params.sample; },
+        [instrument](Project& p, const Id& v) {
+            instrument_or_throw(p, instrument).params.sample = v;
+        },
+        sample));
+    return Expected<Delta>::success(std::move(delta));
 }
 
 }  // namespace core::functions

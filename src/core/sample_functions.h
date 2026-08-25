@@ -30,4 +30,9 @@ Expected<CreatedDelta> create_instrument(const Project& project, std::string nam
 Expected<CreatedDelta> add_part(const Project& project, Id pattern, Id instrument,
                                 Origin origin = Origin::User);
 
+// Points one Instrument at a Sample already in the Project. Does not import
+// or read a file, and touches no Pattern.
+Expected<Delta> set_instrument_sample(const Project& project, Id instrument, Id sample,
+                                      Origin origin = Origin::User);
+
 }  // namespace core::functions
