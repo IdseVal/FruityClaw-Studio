@@ -13,8 +13,9 @@ add_executable(core_tests
   test_effect_functions.cpp
   test_engine.cpp
   test_engine_stress.cpp
+  test_effects.cpp
 )
-target_link_libraries(core_tests PRIVATE core engine Catch2::Catch2WithMain)
+target_link_libraries(core_tests PRIVATE core engine effects Catch2::Catch2WithMain)
 
 include(CTest)
 include(Catch)
