@@ -12,6 +12,7 @@ add_executable(core_tests
   test_sample_functions.cpp
   test_engine.cpp
   test_engine_stress.cpp
+  test_assistant_key.cpp
   test_function_file.cpp
   test_recorder.cpp
   test_audio_session.cpp

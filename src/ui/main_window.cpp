@@ -38,8 +38,9 @@ MainWindow::MainWindow(core::ProjectHistory& history, core::TransportPort& trans
     : QMainWindow(parent), history_(history), transport_(transport), toggles_(toggles) {
     setWindowTitle(product_name);
     resize(1200, 640);
-    setStyleSheet(QString("QMainWindow, QToolBar, QStatusBar { background: %1; "
-                          "color: %2; border: none; }"
+    setStyleSheet(QString("QMainWindow, QToolBar, QStatusBar, QMenuBar, QMenu { "
+                          "background: %1; color: %2; border: none; }"
+                          "QMenuBar::item:selected, QMenu::item:selected { color: %3; }"
                           "QToolButton { color: %2; background: transparent; "
                           "border: none; padding: 6px 10px; font-size: 13px; }"
                           "QToolButton:hover { color: %3; }"

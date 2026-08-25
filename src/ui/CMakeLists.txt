@@ -13,6 +13,7 @@ add_library(ui STATIC
   function_switchboard.cpp
   settings_dialog.cpp
   main_window.cpp
+  assistant_key_dialog.cpp
 )
 target_include_directories(ui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_link_libraries(ui PUBLIC core assistant Qt6::Widgets)

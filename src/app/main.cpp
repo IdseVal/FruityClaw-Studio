@@ -1,15 +1,21 @@
 // The composition root: the only place adapters are constructed and wired.
 #include <QApplication>
+#include <QMenu>
+#include <QMenuBar>
+#include <QMessageBox>
+#include <QTimer>
 #include <cstdio>
 #include <memory>
 
 #include "app/audio_session.h"
 #include "app/demo_project.h"
 #include "app/toggle_file.h"
+#include "assistant/key_store.h"
 #include "audioio/portaudio_device.h"
 #include "core/history.h"
 #include "engine/engine.h"
 #include "engine/recorder.h"
+#include "ui/assistant_key_dialog.h"
 #include "ui/main_window.h"
 
 int main(int argc, char** argv) {
@@ -38,7 +44,19 @@ int main(int argc, char** argv) {
     ui::MainWindow window(history, player, player, session, toggles, FCS_PRODUCT_NAME_STR);
     QObject::connect(&window, &ui::MainWindow::toggles_changed,
                      [&toggles] { app::save_toggles(toggles); });
+
+    // The Assistant key: offered once, on first open, over a Studio that is
+    // already complete (core document 1.1a). A decline is never asked again;
+    // the menu is how either answer gets changed later.
+    assistant::FileKeyStore keys(assistant::FileKeyStore::default_directory());
+    QAction* key_action = window.menuBar()->addMenu("&Studio")->addAction("&Assistant key...");
+    QObject::connect(key_action, &QAction::triggered, &window, [&keys, &window] {
+        ui::AssistantKeyDialog(keys, &window).exec();
+    });
     window.show();
+    if (!keys.offer_made()) {
+        QTimer::singleShot(0, &window, [key_action] { key_action->trigger(); });
+    }
 
     int result = qt_app.exec();
 
