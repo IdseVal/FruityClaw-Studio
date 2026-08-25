@@ -481,6 +481,83 @@ TEST_CASE("placing a Sample into a Pattern is one undoable step") {
     }
 }
 
+TEST_CASE("placing under an active filter acts on the Sample shown, not the row number") {
+    BrowserFixture f;
+    QLineEdit* filter = f.browser.findChild<QLineEdit*>();
+    REQUIRE(filter);
+    filter->setText("ris");  // only the Riser remains, now at row 0
+    REQUIRE(f.list->count() == 1);
+    f.list->setCurrentRow(0);
+    CHECK(f.browser.selected() == f.generated_sample);
+
+    QSignalSpy hints(&f.browser, &ui::SampleBrowser::hint_changed);
+    f.browser.place_selected_in(f.ids.melody_pattern);
+
+    const Project& p = f.history.read();
+    REQUIRE(p.instruments.items.size() == 3);
+    CHECK(p.instruments.items.back().params.sample == f.generated_sample);
+    const Pattern* melody = p.patterns.find(f.ids.melody_pattern);
+    REQUIRE(melody->parts.size() == 2);
+    CHECK(melody->parts.back().instrument == p.instruments.items.back().id);
+    CHECK(hints.last().at(0).toString() == "Placed 'Riser' in 'Melody A'.");
+
+    // The filtered view survives the reload the placement triggered, with
+    // the placed Sample still selected, and clears back to the full list.
+    CHECK(f.list->count() == 1);
+    CHECK(f.browser.selected() == f.generated_sample);
+    filter->clear();
+    CHECK(f.list->count() == 3);
+    CHECK(f.browser.selected() == f.generated_sample);
+}
+
+TEST_CASE("the sidebar follows the History: undo takes a placed lane back, selection kept") {
+    BrowserFixture f;
+    f.list->setCurrentRow(1);
+    f.browser.place_selected_in(f.ids.drum_pattern);
+    REQUIRE(f.history.read().patterns.find(f.ids.drum_pattern)->parts.size() == 2);
+
+    REQUIRE(f.history.undo());
+    CHECK(f.history.read().patterns.find(f.ids.drum_pattern)->parts.size() == 1);
+    CHECK(f.list->count() == 3);
+    CHECK(f.browser.selected() == f.history.read().samples.items[1].id);
+
+    // Nothing selected: placing is a no-op and the button is disabled.
+    f.list->clearSelection();
+    f.list->setCurrentItem(nullptr);
+    CHECK_FALSE(f.browser.selected().has_value());
+    Project before = f.history.read();
+    f.browser.place_selected_in(f.ids.drum_pattern);
+    CHECK(f.history.read() == before);
+    QToolButton* button = nullptr;
+    for (QToolButton* candidate : f.browser.findChildren<QToolButton*>()) {
+        if (candidate->menu()) button = candidate;
+    }
+    REQUIRE(button);
+    CHECK_FALSE(button->isEnabled());
+}
+
+TEST_CASE("a Sample without audio lists, opens, and is handed to the port as absent") {
+    auto ids = make_fixture();
+    ids.project.samples.items.push_back(Sample{new_id(), "silent", nullptr, Provenance::human()});
+    ProjectHistory history(std::move(ids.project));
+    StubAudition audition;
+    ui::SampleBrowser browser(history, audition);
+    browser.show();
+    (void)QTest::qWaitForWindowExposed(&browser);
+    QListWidget* list = browser.findChild<QListWidget*>();
+    REQUIRE(list);
+    REQUIRE(list->count() == 3);
+    CHECK(list->item(2)->text() == "silent");
+
+    QTest::mouseClick(list->viewport(), Qt::LeftButton, {}, list->visualItemRect(list->item(2)).center());
+    REQUIRE(audition.played.size() == 1);
+    CHECK(audition.played[0] == nullptr);
+    emit list->itemActivated(list->item(2));  // opening must not dereference the source
+    QLabel* provenance = browser.findChild<QLabel*>("provenance");
+    REQUIRE(provenance);
+    CHECK(provenance->text() == "Made by hand");
+}
+
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication app(argc, argv);

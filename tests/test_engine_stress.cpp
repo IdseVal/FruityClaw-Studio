@@ -79,3 +79,54 @@ TEST_CASE("a publish storm against a running audio thread stays clean") {
     for (float v : left) REQUIRE(std::isfinite(v));
     CHECK(player.status().position >= 0);
 }
+
+// Same FMEA row, the AuditionPort hand-over: cues are handed to the audio
+// thread by the same pointer swap and reclaimed through the same epoch list
+// as RenderModels, so a storm of auditions interleaved with publishes must
+// leave no dangling cue while one may still be playing.
+TEST_CASE("an audition storm against a running audio thread stays clean") {
+    auto f = make_fixture();
+    SampleSource hit = f.project.samples.items[0].source;
+    SampleSource tone = f.project.samples.items[1].source;
+    ProjectHistory history(std::move(f.project));
+
+    engine::Engine player;
+    player.publish(history.read(), 48000.0);
+    player.play();
+
+    std::atomic<bool> done{false};
+    std::atomic<bool> non_finite_sample{false};
+    std::atomic<long long> blocks_rendered{0};
+
+    std::thread audio([&] {
+        std::vector<float> left(256), right(256);
+        float* channels[2] = {left.data(), right.data()};
+        while (!done.load(std::memory_order_acquire)) {
+            player.render(channels, 2, 256);
+            blocks_rendered.fetch_add(1, std::memory_order_relaxed);
+            for (float v : left) {
+                if (!std::isfinite(v)) non_finite_sample.store(true);
+            }
+        }
+    });
+
+    // Edit thread: fresh cue objects every time (a shared source, but each
+    // audition allocates its own AuditionCue), with publishes mixed in so the
+    // retire list interleaves both object kinds.
+    for (int i = 0; i < 8000; ++i) {
+        player.audition(i % 3 == 0 ? tone : hit);
+        if (i % 7 == 0) player.publish(history.read(), 48000.0);
+    }
+
+    done.store(true, std::memory_order_release);
+    audio.join();
+
+    CHECK_FALSE(non_finite_sample.load());
+    CHECK(blocks_rendered.load() > 0);
+
+    std::vector<float> left(512), right(512);
+    float* channels[2] = {left.data(), right.data()};
+    player.audition(hit);
+    player.render(channels, 2, 512);
+    for (float v : left) REQUIRE(std::isfinite(v));
+}
