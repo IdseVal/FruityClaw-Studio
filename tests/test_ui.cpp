@@ -663,6 +663,24 @@ TEST_CASE("Enter in the key field saves") {
     CHECK(f.keys.stored == std::optional<std::string>("sk-enter"));
 }
 
+TEST_CASE("Enter with only whitespace neither saves nor closes") {
+    DialogFixture f;
+    f.field->setText("  	 ");
+    QTest::keyClick(f.field, Qt::Key_Return);
+    CHECK(f.dialog.isVisible());
+    CHECK(f.keys.store_calls == 0);
+    CHECK_FALSE(f.keys.offer_made());
+}
+
+TEST_CASE("the dialog never puts the key into any label") {
+    DialogFixture f;
+    f.keys.fail_store = true;
+    f.field->setText("sk-secret-canary");
+    QTest::mouseClick(f.save, Qt::LeftButton);
+    CHECK_FALSE(all_label_text(f.dialog).contains("sk-secret-canary"));
+    CHECK_FALSE(f.dialog.windowTitle().contains("sk-secret-canary"));
+}
+
 TEST_CASE("a key that cannot be kept is said so, and the dialog stays open") {
     DialogFixture f;
     f.keys.fail_store = true;

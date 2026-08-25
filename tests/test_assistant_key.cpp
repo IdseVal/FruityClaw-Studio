@@ -121,3 +121,50 @@ TEST_CASE("the default directory is a real per-user path") {
     CHECK(dir.is_absolute());
     CHECK_FALSE(dir.filename().empty());
 }
+
+TEST_CASE("a key file that cannot be unsealed reads as no key, and is still replaceable") {
+    TempDir dir;
+    {
+        std::ofstream out(dir.path / "assistant.key", std::ios::binary);
+        out << "not a sealed blob";
+    }
+    assistant::FileKeyStore store(dir.path);
+    CHECK(store.has_key());  // something is there; the transport decides what to do
+#ifdef _WIN32
+    CHECK_FALSE(store.key().has_value());  // DPAPI refuses foreign bytes
+#endif
+    REQUIRE(store.store_key("sk-fresh"));
+    CHECK(*store.key() == "sk-fresh");
+}
+
+TEST_CASE("an empty key file reads as no key") {
+    TempDir dir;
+    { std::ofstream out(dir.path / "assistant.key", std::ios::binary); }
+    assistant::FileKeyStore store(dir.path);
+    CHECK_FALSE(store.key().has_value());
+}
+
+TEST_CASE("a directory that cannot be created makes store_key say so") {
+    TempDir dir;
+    { std::ofstream out(dir.path / "blocker"); out << "a file, not a directory"; }
+    assistant::FileKeyStore store(dir.path / "blocker" / "inside");
+    CHECK_FALSE(store.store_key("sk-nowhere"));
+    CHECK_FALSE(store.has_key());
+}
+
+TEST_CASE("recording the offer twice is harmless") {
+    TempDir dir;
+    assistant::FileKeyStore store(dir.path);
+    store.record_offer();
+    store.record_offer();
+    CHECK(store.offer_made());
+    CHECK_FALSE(std::filesystem::exists(dir.path / "assistant.key.offered.tmp"));
+}
+
+TEST_CASE("a key with surrounding whitespace and unicode survives the round trip") {
+    TempDir dir;
+    assistant::FileKeyStore store(dir.path);
+    const std::string key = " sk-\xC3\xA9-\xE2\x9C\x93-tail\n";
+    REQUIRE(store.store_key(key));
+    CHECK(*store.key() == key);  // the store keeps bytes; trimming is the dialog's job
+}
