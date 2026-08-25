@@ -7,5 +7,7 @@ add_library(core STATIC
   arrangement_functions.cpp
   sample_functions.cpp
   generation.cpp
+  effect_schema.cpp
+  effect_functions.cpp
 )
 target_include_directories(core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
