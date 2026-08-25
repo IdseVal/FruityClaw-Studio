@@ -38,12 +38,9 @@ void ledger_row(QGridLayout* grid, int row, const QString& label, const std::str
 
 GenerationSettingsPage::GenerationSettingsPage(core::GenerationSettingsPort& store,
                                                QWidget* parent)
-    : QDialog(parent), store_(store), settings_(store.read()) {
-    setWindowTitle("Music generation");
-    setModal(true);
-    resize(680, 720);
+    : QWidget(parent), store_(store), settings_(store.read()) {
     setStyleSheet(
-        QString("QDialog, QScrollArea, QScrollArea > QWidget > QWidget { background: %1; }"
+        QString("QScrollArea, QScrollArea > QWidget > QWidget { background: %1; }"
                 "QLabel { color: %2; font-size: 13px; }"
                 "QLineEdit { background: %3; color: %2; border: 1px solid %4;"
                 " padding: 6px 8px; font-family: Consolas, monospace; font-size: 12px; }"
@@ -168,11 +165,6 @@ GenerationSettingsPage::GenerationSettingsPage(core::GenerationSettingsPort& sto
     connect(off_button_, &QPushButton::clicked, this, &GenerationSettingsPage::turn_off);
     buttons->addWidget(off_button_);
     buttons->addStretch(1);
-
-    auto* close = new QPushButton("Close", body);
-    close->setAutoDefault(false);
-    connect(close, &QPushButton::clicked, this, &QDialog::reject);
-    buttons->addWidget(close);
 
     on_button_ = new QPushButton(body);
     on_button_->setObjectName("generation_on");

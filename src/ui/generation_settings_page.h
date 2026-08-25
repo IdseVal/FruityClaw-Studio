@@ -9,12 +9,12 @@
 // what leaves the machine, output rights, conditions) so the user compares
 // trade-offs row by row instead of reading a ranking (ADR-003).
 //
-// Reached from the Studio menu, and from any surface that gates on
-// generation: when a user tries to generate with it off they are guided
-// here, told why, rather than shown a dead control.
+// A tab of SettingsDialog. Reached from Settings, and from any surface that
+// gates on generation: when a user tries to generate with it off they are
+// guided here, told why, rather than shown a dead control.
 #pragma once
 
-#include <QDialog>
+#include <QWidget>
 #include <vector>
 
 #include "core/generation.h"
@@ -27,7 +27,7 @@ class QRadioButton;
 
 namespace ui {
 
-class GenerationSettingsPage : public QDialog {
+class GenerationSettingsPage : public QWidget {
     Q_OBJECT
 
 public:
