@@ -8,6 +8,7 @@
 #include "audioio/portaudio_device.h"
 #include "core/history.h"
 #include "engine/engine.h"
+#include "persistence/project_file.h"
 #include "ui/main_window.h"
 
 namespace {
@@ -65,7 +66,21 @@ int main(int argc, char** argv) {
         player.publish(history.read(), sample_rate);
     });
 
-    ui::MainWindow window(history, player, FCS_PRODUCT_NAME_STR);
+    // Save encodes the current Project; open replaces it and starts an empty
+    // History (history contract section 8). The window marks the History
+    // saved itself, after an explicit user save.
+    ui::ProjectFilePort files;
+    files.save = [&history](const std::filesystem::path& path) {
+        return persistence::save_project(history.read(), path).error;
+    };
+    files.open = [&history](const std::filesystem::path& path) {
+        persistence::LoadResult loaded = persistence::load_project(path);
+        if (!loaded.ok()) return loaded.error;
+        history.replace(std::move(*loaded.project));
+        return std::string{};
+    };
+
+    ui::MainWindow window(history, player, std::move(files), FCS_PRODUCT_NAME_STR);
     window.show();
 
     int result = qt_app.exec();

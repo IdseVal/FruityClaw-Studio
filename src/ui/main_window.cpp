@@ -1,8 +1,12 @@
 #include "ui/main_window.h"
 
+#include <QCloseEvent>
+#include <QFileDialog>
 #include <QHBoxLayout>
 #include <QKeySequence>
 #include <QLabel>
+#include <QMenuBar>
+#include <QMessageBox>
 #include <QSplitter>
 #include <QStatusBar>
 #include <QTimer>
@@ -16,9 +20,12 @@
 namespace ui {
 
 MainWindow::MainWindow(core::ProjectHistory& history, core::TransportPort& transport,
-                       const QString& product_name, QWidget* parent)
-    : QMainWindow(parent), history_(history), transport_(transport) {
-    setWindowTitle(product_name);
+                       ProjectFilePort files, const QString& product_name, QWidget* parent)
+    : QMainWindow(parent),
+      history_(history),
+      transport_(transport),
+      files_(std::move(files)),
+      product_name_(product_name) {
     resize(1200, 640);
     setStyleSheet(QString("QMainWindow, QToolBar, QStatusBar { background: %1; "
                           "color: %2; border: none; }"
@@ -30,6 +37,16 @@ MainWindow::MainWindow(core::ProjectHistory& history, core::TransportPort& trans
                       .arg(theme::kPanel.name(), theme::kTextPrimary.name(),
                            theme::kAccent.name(), theme::kTextSecondary.name(),
                            theme::kGridBar.name()));
+
+    // --- file menu ----------------------------------------------------------
+    auto* file_menu = menuBar()->addMenu("&File");
+    auto* open_action = file_menu->addAction("&Open...", QKeySequence::Open, this,
+                                             [this] { open(); });
+    auto* save_action = file_menu->addAction("&Save", QKeySequence::Save, this,
+                                             [this] { save(); });
+    auto* save_as_action = file_menu->addAction("Save &As...", QKeySequence::SaveAs, this,
+                                                [this] { save_as(); });
+    for (QAction* action : {open_action, save_action, save_as_action}) addAction(action);
 
     // --- transport bar ------------------------------------------------------
     auto* bar = addToolBar("Transport");
@@ -110,9 +127,75 @@ MainWindow::MainWindow(core::ProjectHistory& history, core::TransportPort& trans
     connect(timer, &QTimer::timeout, this, [this] { refresh_transport(); });
     timer->start();
 
-    history_.observe([this] { refresh_undo_redo(); });
+    history_.observe([this] {
+        refresh_undo_redo();
+        refresh_title();
+    });
     refresh_undo_redo();
+    refresh_title();
     refresh_transport();
+}
+
+void MainWindow::closeEvent(QCloseEvent* event) {
+    if (confirm_discard_changes()) {
+        event->accept();
+    } else {
+        event->ignore();
+    }
+}
+
+void MainWindow::refresh_title() {
+    QString file = current_file_.empty()
+                       ? "Untitled"
+                       : QString::fromStdString(current_file_.filename().string());
+    QString dirty = history_.state().is_dirty ? "*" : "";
+    setWindowTitle(QString("%1%2 - %3").arg(file, dirty, product_name_));
+}
+
+bool MainWindow::save() {
+    if (current_file_.empty()) return save_as();
+    std::string error = files_.save(current_file_);
+    if (!error.empty()) {
+        QMessageBox::critical(this, "Save failed", QString::fromStdString(error));
+        return false;
+    }
+    // Only an explicit user save moves the saved cursor (history contract 8.3).
+    history_.mark_saved();
+    refresh_title();
+    statusBar()->showMessage("Saved " + QString::fromStdString(current_file_.string()));
+    return true;
+}
+
+bool MainWindow::save_as() {
+    QString chosen = QFileDialog::getSaveFileName(
+        this, "Save Project", QString::fromStdString(current_file_.string()));
+    if (chosen.isEmpty()) return false;
+    current_file_ = std::filesystem::path(chosen.toStdString());
+    return save();
+}
+
+void MainWindow::open() {
+    if (!confirm_discard_changes()) return;
+    QString chosen = QFileDialog::getOpenFileName(this, "Open Project");
+    if (chosen.isEmpty()) return;
+    std::filesystem::path path(chosen.toStdString());
+    std::string error = files_.open(path);
+    if (!error.empty()) {
+        QMessageBox::critical(this, "Open failed", QString::fromStdString(error));
+        return;
+    }
+    current_file_ = path;
+    refresh_title();
+    statusBar()->showMessage("Opened " + chosen);
+}
+
+bool MainWindow::confirm_discard_changes() {
+    if (!history_.state().is_dirty) return true;
+    auto choice = QMessageBox::question(
+        this, "Unsaved changes", "The Project has unsaved changes. Save them?",
+        QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel, QMessageBox::Save);
+    if (choice == QMessageBox::Save) return save();
+    return choice == QMessageBox::Discard;
 }
 
 void MainWindow::refresh_transport() {

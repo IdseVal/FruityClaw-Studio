@@ -267,7 +267,7 @@ TEST_CASE("MainWindow's undo and redo actions follow HistoryState") {
     auto ids = make_fixture();
     ProjectHistory history(std::move(ids.project));
     StubTransport transport;
-    ui::MainWindow window(history, transport, "Test");
+    ui::MainWindow window(history, transport, {}, "Test");
     window.show();
     (void)QTest::qWaitForWindowExposed(&window);
 
@@ -304,7 +304,7 @@ TEST_CASE("MainWindow's transport poll reflects the port's status") {
     auto ids = make_fixture();
     ProjectHistory history(std::move(ids.project));
     StubTransport transport;
-    ui::MainWindow window(history, transport, "Test");
+    ui::MainWindow window(history, transport, {}, "Test");
     window.show();
     (void)QTest::qWaitForWindowExposed(&window);
 
@@ -333,4 +333,29 @@ int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication app(argc, argv);
     return Catch::Session().run(argc, argv);
+}
+
+TEST_CASE("MainWindow's title carries the dirty marker and the File actions exist") {
+    auto f = make_fixture();
+    core::ProjectHistory history(std::move(f.project));
+    StubTransport transport;
+    ui::MainWindow window(history, transport, {}, "Test");
+
+    CHECK(window.windowTitle() == "Untitled - Test");
+
+    auto rename = rename_track(history.read(), f.arrangement, f.track_a, "Renamed");
+    REQUIRE(rename.ok());
+    REQUIRE(history.apply(std::move(*rename)) == core::ApplyResult::Applied);
+    CHECK(window.windowTitle() == "Untitled* - Test");
+
+    history.mark_saved();
+    history.undo();  // an observed change refreshes the title
+    history.redo();
+    CHECK(window.windowTitle() == "Untitled - Test");
+
+    QStringList texts;
+    for (QAction* action : window.actions()) texts << action->text();
+    CHECK(texts.contains("&Open..."));
+    CHECK(texts.contains("&Save"));
+    CHECK(texts.contains("Save &As..."));
 }
