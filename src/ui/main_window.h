@@ -7,11 +7,13 @@
 #include <QMainWindow>
 
 #include "assistant/function_file.h"
+#include "core/generation.h"
 #include "core/history.h"
 #include "core/playback.h"
 
 class QLabel;
 class QToolButton;
+class QAction;
 
 namespace ui {
 
@@ -26,14 +28,18 @@ class MainWindow : public QMainWindow {
 public:
     MainWindow(core::ProjectHistory& history, core::TransportPort& transport,
                core::AuditionPort& audition, core::RecorderPort& recorder,
-               assistant::FunctionToggles& toggles, const QString& product_name,
+               assistant::FunctionToggles& toggles,
+               core::GenerationSettingsPort& generation, const QString& product_name,
                QWidget* parent = nullptr);
 
-    // Capabilities the settings tab reports against; off until the
-    // generation settings page (issue #20) turns it on.
-    void set_capabilities(assistant::Capabilities capabilities) { capabilities_ = capabilities; }
+    // Opens Settings. `guidance`, when given, opens on the music-generation
+    // tab and tells the user what they tried and why they landed here.
+    void open_settings(const QString& guidance = {});
 
-    void open_settings();
+    // What a surface that wants to generate does: with generation on it
+    // proceeds, with it off the user is guided to the settings page rather
+    // than shown a dead control (core document 6.4: gated, not absent).
+    void request_generation();
 
 signals:
     // A Function toggle was written; the composition root persists the store.
@@ -42,11 +48,13 @@ signals:
 private:
     void refresh_transport();
     void refresh_undo_redo();
+    // What the Assistant may be offered, derived from the generation store.
+    assistant::Capabilities capabilities() const;
 
     core::ProjectHistory& history_;
     core::TransportPort& transport_;
     assistant::FunctionToggles& toggles_;
-    assistant::Capabilities capabilities_;
+    core::GenerationSettingsPort& generation_;
 
     ArrangementView* arrangement_view_ = nullptr;
     PatternPalette* palette_ = nullptr;
@@ -57,6 +65,7 @@ private:
     QLabel* tempo_label_ = nullptr;
     QAction* undo_action_ = nullptr;
     QAction* redo_action_ = nullptr;
+    QAction* generate_action_ = nullptr;
 };
 
 }  // namespace ui

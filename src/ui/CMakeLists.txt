@@ -11,6 +11,7 @@ add_library(ui STATIC
   sample_browser.cpp
   record_bar.cpp
   function_switchboard.cpp
+  generation_settings_page.cpp
   settings_dialog.cpp
   main_window.cpp
   assistant_key_dialog.cpp

@@ -14,14 +14,22 @@ add_executable(core_tests
   test_engine_stress.cpp
   test_assistant_key.cpp
   test_function_file.cpp
+  test_generation.cpp
+  test_generation_file.cpp
   test_recorder.cpp
   test_audio_session.cpp
   # The RecorderPort implementation lives in the composition root. It needs
   # only the seam header, so it compiles into the tests without the PortAudio
   # adapter and runs headless.
   ${CMAKE_SOURCE_DIR}/src/app/audio_session.cpp
+  ${CMAKE_SOURCE_DIR}/src/app/generation_file.cpp
 )
 target_link_libraries(core_tests PRIVATE core engine assistant Catch2::Catch2WithMain)
+# generation_file.cpp is compiled in the same way; DPAPI needs crypt32.
+target_compile_definitions(core_tests PRIVATE FCS_APP_ID_STR="${FCS_APP_ID}")
+if(WIN32)
+  target_link_libraries(core_tests PRIVATE crypt32)
+endif()
 
 include(CTest)
 include(Catch)

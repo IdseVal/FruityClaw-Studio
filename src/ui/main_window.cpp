@@ -33,9 +33,11 @@ QLabel* section_header(const QString& text, QWidget* parent) {
 
 MainWindow::MainWindow(core::ProjectHistory& history, core::TransportPort& transport,
                        core::AuditionPort& audition, core::RecorderPort& recorder,
-                       assistant::FunctionToggles& toggles, const QString& product_name,
+                       assistant::FunctionToggles& toggles,
+                       core::GenerationSettingsPort& generation, const QString& product_name,
                        QWidget* parent)
-    : QMainWindow(parent), history_(history), transport_(transport), toggles_(toggles) {
+    : QMainWindow(parent), history_(history), transport_(transport), toggles_(toggles),
+      generation_(generation) {
     setWindowTitle(product_name);
     resize(1200, 640);
     setStyleSheet(QString("QMainWindow, QToolBar, QStatusBar, QMenuBar, QMenu { "
@@ -88,6 +90,15 @@ MainWindow::MainWindow(core::ProjectHistory& history, core::TransportPort& trans
     bar->addWidget(record_bar_);
     connect(record_bar_, &RecordBar::hint_changed, this,
             [this](const QString& hint) { statusBar()->showMessage(hint); });
+
+    // Present whether or not generation is on: the gate is behind it, not
+    // in front of it (core document 6.4).
+    generate_action_ = new QAction("Generate", this);
+    generate_action_->setToolTip("Generate a Sample from a description");
+    connect(generate_action_, &QAction::triggered, this, &MainWindow::request_generation);
+    auto* generate_button = new QToolButton(bar);
+    generate_button->setDefaultAction(generate_action_);
+    bar->addWidget(generate_button);
 
     auto* spacer = new QWidget(bar);
     spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
@@ -171,10 +182,43 @@ MainWindow::MainWindow(core::ProjectHistory& history, core::TransportPort& trans
     refresh_transport();
 }
 
-void MainWindow::open_settings() {
-    SettingsDialog dialog(toggles_, capabilities_, this);
-    connect(&dialog, &SettingsDialog::toggles_changed, this, &MainWindow::toggles_changed);
-    dialog.exec();
+assistant::Capabilities MainWindow::capabilities() const {
+    core::GenerationSettings settings = generation_.read();
+    return {settings.enabled && core::find_model(settings.model) != nullptr};
+}
+
+// The dialog outlives this call (open, not exec) so a surface that sent the
+// user here is not blocked behind it, and so the guidance can be read back.
+void MainWindow::open_settings(const QString& guidance) {
+    auto* dialog = new SettingsDialog(toggles_, capabilities(), generation_, this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    connect(dialog, &SettingsDialog::toggles_changed, this, &MainWindow::toggles_changed);
+    connect(dialog, &SettingsDialog::generation_changed, this, [this] {
+        core::GenerationSettings settings = generation_.read();
+        const core::GenerationModel* model = core::find_model(settings.model);
+        statusBar()->showMessage(settings.enabled && model
+                                     ? QString("Music generation is on, with %1.")
+                                           .arg(model->name.c_str())
+                                     : "Music generation is off.");
+    });
+    if (!guidance.isEmpty()) dialog->show_generation(guidance);
+    dialog->open();
+}
+
+void MainWindow::request_generation() {
+    core::GenerationSettings settings = generation_.read();
+    const core::GenerationModel* model = core::find_model(settings.model);
+    if (!settings.enabled || !model) {
+        open_settings(
+            "You asked to generate a Sample, and music generation is off. It is off on "
+            "every fresh install: nothing is downloaded until you choose a model below.");
+        return;
+    }
+    // The generator behind the chosen model is a later issue; the gate is
+    // what this surface owns.
+    statusBar()->showMessage(
+        QString("Music generation is on, with %1. Generating Samples is not built yet.")
+            .arg(model->name.c_str()));
 }
 
 void MainWindow::refresh_transport() {

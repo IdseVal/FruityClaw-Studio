@@ -5,12 +5,14 @@
 #include <QVBoxLayout>
 
 #include "ui/function_switchboard.h"
+#include "ui/generation_settings_page.h"
 #include "ui/theme.h"
 
 namespace ui {
 
 SettingsDialog::SettingsDialog(assistant::FunctionToggles& toggles,
-                               assistant::Capabilities capabilities, QWidget* parent)
+                               assistant::Capabilities capabilities,
+                               core::GenerationSettingsPort& generation, QWidget* parent)
     : QDialog(parent) {
     setWindowTitle("Settings");
     resize(760, 620);
@@ -26,13 +28,17 @@ SettingsDialog::SettingsDialog(assistant::FunctionToggles& toggles,
                            theme::kTextSecondary.name(), theme::kAccent.name(),
                            theme::kGridBar.name()));
 
-    auto* tabs = new QTabWidget(this);
+    tabs_ = new QTabWidget(this);
+    QTabWidget* tabs = tabs_;
     auto* functions_tab = new QWidget(tabs);
     auto* functions_layout = new QVBoxLayout(functions_tab);
     functions_layout->setContentsMargins(16, 16, 16, 8);
     switchboard_ = new FunctionSwitchboard(toggles, capabilities, functions_tab);
     functions_layout->addWidget(switchboard_);
     tabs->addTab(functions_tab, "Assistant Functions");
+
+    generation_ = new GenerationSettingsPage(generation, tabs);
+    tabs->addTab(generation_, "Music generation");
 
     // Every switch takes effect as it is flipped; there is nothing to apply.
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, this);
@@ -44,6 +50,13 @@ SettingsDialog::SettingsDialog(assistant::FunctionToggles& toggles,
     layout->addWidget(buttons);
 
     connect(switchboard_, &FunctionSwitchboard::changed, this, &SettingsDialog::toggles_changed);
+    connect(generation_, &GenerationSettingsPage::changed, this,
+            &SettingsDialog::generation_changed);
+}
+
+void SettingsDialog::show_generation(const QString& guidance) {
+    generation_->show_guidance(guidance);
+    tabs_->setCurrentWidget(generation_);
 }
 
 }  // namespace ui

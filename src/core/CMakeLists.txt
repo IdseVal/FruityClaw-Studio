@@ -6,5 +6,6 @@ add_library(core STATIC
   history.cpp
   arrangement_functions.cpp
   sample_functions.cpp
+  generation.cpp
 )
 target_include_directories(core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)

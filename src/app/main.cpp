@@ -9,6 +9,7 @@
 
 #include "app/audio_session.h"
 #include "app/demo_project.h"
+#include "app/generation_file.h"
 #include "app/toggle_file.h"
 #include "assistant/key_store.h"
 #include "audioio/portaudio_device.h"
@@ -41,7 +42,11 @@ int main(int argc, char** argv) {
     });
 
     assistant::FunctionToggles toggles = app::load_toggles();
-    ui::MainWindow window(history, player, player, session, toggles, FCS_PRODUCT_NAME_STR);
+    // Music generation: off until the user chooses a model in settings (core
+    // document 6.4). The choice and any key live in the per-user config dir.
+    app::GenerationFile generation(app::GenerationFile::default_directory());
+    ui::MainWindow window(history, player, player, session, toggles, generation,
+                          FCS_PRODUCT_NAME_STR);
     QObject::connect(&window, &ui::MainWindow::toggles_changed,
                      [&toggles] { app::save_toggles(toggles); });
 

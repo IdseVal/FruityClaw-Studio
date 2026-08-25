@@ -14,10 +14,16 @@
 // the view's layout constants (header 160 px, ruler 28 px, track 56 px,
 // 28 px per beat at default zoom) — if the layout changes deliberately,
 // these numbers change with it.
+#include <algorithm>
+#include <string_view>
+
 #include <catch2/catch_session.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include <QAction>
+#include <QCheckBox>
+#include <QPushButton>
+#include <QRadioButton>
 #include <QApplication>
 #include <QComboBox>
 #include <QLabel>
@@ -27,6 +33,7 @@
 #include <QMouseEvent>
 #include <QPushButton>
 #include <QSignalSpy>
+#include <QStatusBar>
 #include <QToolButton>
 #include <QtTest/QtTest>
 
@@ -40,18 +47,20 @@
 
 #include "assistant/registry.h"
 #include "core/arrangement_functions.h"
+#include "core/generation.h"
 #include "core/history.h"
 #include "core/playback.h"
 #include "test_support.h"
 #include "ui/arrangement_view.h"
 #include "ui/assistant_key_dialog.h"
 #include "ui/function_switchboard.h"
+#include "ui/generation_settings_page.h"
 #include "ui/main_window.h"
 #include "ui/pattern_palette.h"
+#include "ui/settings_dialog.h"
 #include "ui/provenance.h"
 #include "ui/record_bar.h"
 #include "ui/sample_browser.h"
-#include "ui/settings_dialog.h"
 
 using namespace core;
 using namespace core::functions;
@@ -155,6 +164,25 @@ struct RecordFixture {
     QString last_hint() const {
         return hints.isEmpty() ? QString() : hints.last().at(0).toString();
     }
+};
+
+// An in-memory GenerationSettingsPort: a fresh install until written to.
+struct StubGenerationStore : GenerationSettingsPort {
+    GenerationSettings kept;
+    std::optional<std::string> key_kept;
+    bool writable = true;
+    GenerationSettings read() const override { return kept; }
+    bool write(const GenerationSettings& settings) override {
+        if (!writable) return false;
+        kept = settings;
+        return true;
+    }
+    bool has_key() const override { return key_kept.has_value(); }
+    bool store_key(const std::string& key) override {
+        key_kept = key;
+        return true;
+    }
+    void clear_key() override { key_kept.reset(); }
 };
 
 // The sidebar over the fixture plus one AI-generated Sample (section 6.3).
@@ -417,7 +445,8 @@ TEST_CASE("MainWindow's undo and redo actions follow HistoryState") {
     StubAudition audition;
     StubRecorder recorder;
     assistant::FunctionToggles toggles;
-    ui::MainWindow window(history, transport, audition, recorder, toggles, "Test");
+    StubGenerationStore generation;
+    ui::MainWindow window(history, transport, audition, recorder, toggles, generation, "Test");
     window.show();
     (void)QTest::qWaitForWindowExposed(&window);
 
@@ -457,7 +486,8 @@ TEST_CASE("MainWindow's transport poll reflects the port's status") {
     StubAudition audition;
     StubRecorder recorder;
     assistant::FunctionToggles toggles;
-    ui::MainWindow window(history, transport, audition, recorder, toggles, "Test");
+    StubGenerationStore generation;
+    ui::MainWindow window(history, transport, audition, recorder, toggles, generation, "Test");
     window.show();
     (void)QTest::qWaitForWindowExposed(&window);
 
@@ -1065,7 +1095,8 @@ TEST_CASE("gated generation rows say so and stay out of the file until enabled")
 
 TEST_CASE("the settings dialog hosts the switchboard in a tab and relays its changes") {
     assistant::FunctionToggles toggles;
-    ui::SettingsDialog dialog(toggles, {});
+    StubGenerationStore generation;
+    ui::SettingsDialog dialog(toggles, {}, generation);
     QSignalSpy relayed(&dialog, &ui::SettingsDialog::toggles_changed);
     dialog.show();
     (void)QTest::qWaitForWindowExposed(&dialog);
@@ -1086,7 +1117,8 @@ TEST_CASE("MainWindow offers a Settings action with the platform preferences sho
     StubAudition audition;
     StubRecorder recorder;
     assistant::FunctionToggles toggles;
-    ui::MainWindow window(history, transport, audition, recorder, toggles, "Test");
+    StubGenerationStore generation;
+    ui::MainWindow window(history, transport, audition, recorder, toggles, generation, "Test");
 
     QAction* settings = nullptr;
     for (QAction* action : window.actions())
@@ -1257,4 +1289,281 @@ TEST_CASE("recording with no input chosen is refused with a hint") {
     QTest::keyClick(&f.bar, Qt::Key_R);
     CHECK_FALSE(f.recorder.recording);
     CHECK(f.history.read().samples.items.size() == 2);
+}
+
+// ---------------------------------------------------------------------------
+// Music generation settings (issue #20, core document 6.4)
+
+namespace {
+
+struct PageFixture {
+    StubGenerationStore store;
+    std::unique_ptr<ui::GenerationSettingsPage> page;
+
+    PageFixture() { open(); }
+
+    void open() {
+        page = std::make_unique<ui::GenerationSettingsPage>(store);
+        page->show();
+        (void)QTest::qWaitForWindowExposed(page.get());
+    }
+
+    template <class T>
+    T* child(const QString& name) const {
+        T* found = page->findChild<T*>(name);
+        REQUIRE(found);
+        return found;
+    }
+
+    void turn_on() { child<QPushButton>("generation_on")->click(); }
+    QString problem() const { return child<QLabel>("generation_problem")->text(); }
+};
+
+}  // namespace
+
+TEST_CASE("a fresh install opens the page off, with no model chosen") {
+    PageFixture f;
+    CHECK(f.child<QLabel>("generation_state")->text() == "OFF");
+    for (QRadioButton* radio : f.page->findChildren<QRadioButton*>()) {
+        CHECK_FALSE(radio->isChecked());
+    }
+    CHECK_FALSE(f.child<QCheckBox>("generation_acknowledge")->isChecked());
+    CHECK_FALSE(f.child<QPushButton>("generation_off")->isVisible());
+    CHECK(f.child<QLabel>("generation_warning")->isVisible());
+
+    f.turn_on();
+    CHECK(f.problem() == "Choose a model first.");
+    CHECK_FALSE(f.store.kept.enabled);
+}
+
+TEST_CASE("every listed model shows its rights position, not just its name") {
+    PageFixture f;
+    QStringList texts;
+    for (QLabel* label : f.page->findChildren<QLabel*>()) texts << label->text();
+    for (const GenerationModel& model : handpicked_models()) {
+        INFO(model.id);
+        CHECK(f.child<QRadioButton>("generation_model_" + QString::fromStdString(model.id))
+                  ->text() == QString::fromStdString(model.name));
+        CHECK(texts.contains(QString::fromStdString(model.output_rights)));
+        CHECK(texts.contains(QString::fromStdString(model.conditions)));
+        CHECK(texts.contains(QString::fromStdString(model.leaves_machine)));
+    }
+}
+
+TEST_CASE("a provisional entry is shown but cannot be chosen") {
+    PageFixture f;
+    CHECK_FALSE(f.child<QRadioButton>("generation_model_stable-audio-api")->isEnabled());
+}
+
+TEST_CASE("the local path: choose a model, name the weights folder, confirm, turn on") {
+    PageFixture f;
+    f.child<QRadioButton>("generation_model_stable-audio-3")->click();
+    f.child<QLineEdit>("generation_weights_stable-audio-3")->setText("  C:/models/sa3 ");
+
+    // The section 6.2 warning must be confirmed before anything is kept.
+    f.turn_on();
+    CHECK(f.problem() ==
+          "Confirm that you understand generated output may not be licenseable.");
+    CHECK_FALSE(f.store.kept.enabled);
+
+    f.child<QCheckBox>("generation_acknowledge")->click();
+    QSignalSpy changed(f.page.get(), &ui::GenerationSettingsPage::changed);
+    f.turn_on();
+    CHECK(changed.count() == 1);
+    CHECK(f.store.kept == GenerationSettings{true, "stable-audio-3", "C:/models/sa3"});
+    CHECK_FALSE(f.store.has_key());
+    CHECK(f.child<QLabel>("generation_state")->text() == QString::fromUtf8("ON \xC2\xB7 Stable Audio 3"));
+    CHECK(f.child<QPushButton>("generation_off")->isVisible());
+
+    // Reopening reads the kept choice back.
+    f.open();
+    CHECK(f.child<QRadioButton>("generation_model_stable-audio-3")->isChecked());
+    CHECK(f.child<QLineEdit>("generation_weights_stable-audio-3")->text() == "C:/models/sa3");
+}
+
+TEST_CASE("the local path needs the weights folder") {
+    PageFixture f;
+    f.child<QRadioButton>("generation_model_ace-step-1.5")->click();
+    f.child<QCheckBox>("generation_acknowledge")->click();
+    f.turn_on();
+    CHECK(f.problem() == "Choose the folder holding the ACE-Step 1.5 weights.");
+    CHECK_FALSE(f.store.kept.enabled);
+}
+
+TEST_CASE("the remote path: paste a key, confirm, turn on; the key never stays in the field") {
+    PageFixture f;
+    f.child<QRadioButton>("generation_model_elevenlabs-music")->click();
+    f.child<QCheckBox>("generation_acknowledge")->click();
+    f.turn_on();
+    CHECK(f.problem() == "Paste your ElevenLabs Music API key.");
+
+    QLineEdit* key = f.child<QLineEdit>("generation_key_elevenlabs-music");
+    CHECK(key->echoMode() == QLineEdit::Password);
+    key->setText(" xi-secret \n");
+    f.turn_on();
+    CHECK(f.store.kept == GenerationSettings{true, "elevenlabs-music", ""});
+    CHECK(f.store.key_kept == "xi-secret");
+    CHECK(key->text().isEmpty());
+    CHECK(f.child<QLabel>("generation_key_state_elevenlabs-music")->text() ==
+          "A key is kept. Paste to replace it.");
+
+    // Off keeps the key, so turning back on needs nothing pasted again.
+    f.open();
+    f.child<QPushButton>("generation_off")->click();
+    CHECK_FALSE(f.store.kept.enabled);
+    CHECK(f.store.has_key());
+    f.turn_on();
+    CHECK(f.store.kept.enabled);
+}
+
+TEST_CASE("switching from a remote model to a local one drops the key") {
+    PageFixture f;
+    f.store.kept = {true, "elevenlabs-music", ""};
+    f.store.key_kept = "xi-secret";
+    f.open();
+    f.child<QRadioButton>("generation_model_ace-step-1.5")->click();
+    f.child<QLineEdit>("generation_weights_ace-step-1.5")->setText("/models/ace");
+    f.turn_on();
+    CHECK(f.store.kept == GenerationSettings{true, "ace-step-1.5", "/models/ace"});
+    CHECK_FALSE(f.store.has_key());
+}
+
+TEST_CASE("a store that cannot be written is reported, not pretended") {
+    PageFixture f;
+    f.store.writable = false;
+    f.child<QRadioButton>("generation_model_ace-step-1.5")->click();
+    f.child<QLineEdit>("generation_weights_ace-step-1.5")->setText("/models/ace");
+    f.child<QCheckBox>("generation_acknowledge")->click();
+    f.turn_on();
+    CHECK(f.problem().startsWith("The setting could not be saved."));
+    CHECK(f.child<QLabel>("generation_state")->text() == "OFF");
+}
+
+TEST_CASE("a model removed from the list is explained and the page reads as off") {
+    PageFixture f;
+    f.store.kept = {false, "retired-model", ""};  // the store already turned it off
+    f.open();
+    CHECK(f.child<QLabel>("generation_state")->text() == "OFF");
+    CHECK(f.child<QLabel>("generation_removed")->text().contains("retired-model"));
+}
+
+TEST_CASE("Generate with generation off guides the user to the settings page") {
+    auto ids = make_fixture();
+    ProjectHistory history(std::move(ids.project));
+    StubTransport transport;
+    StubAudition audition;
+    StubRecorder recorder;
+    assistant::FunctionToggles toggles;
+    StubGenerationStore generation;
+    ui::MainWindow window(history, transport, audition, recorder, toggles, generation, "Test");
+    window.show();
+    (void)QTest::qWaitForWindowExposed(&window);
+
+    QToolButton* generate = nullptr;
+    for (QToolButton* button : window.findChildren<QToolButton*>()) {
+        if (button->text() == "Generate") generate = button;
+    }
+    REQUIRE(generate);
+    CHECK(generate->isEnabled());  // gated, not absent
+
+    generate->click();
+    auto* dialog = window.findChild<ui::SettingsDialog*>();
+    REQUIRE(dialog);
+    CHECK(dialog->isVisible());
+    auto* page = dialog->findChild<ui::GenerationSettingsPage*>();
+    REQUIRE(page);
+    CHECK(page->isVisible());  // the generation tab is the one shown
+    QLabel* guidance = page->findChild<QLabel*>("generation_guidance");
+    REQUIRE(guidance);
+    CHECK(guidance->isVisible());
+    CHECK(guidance->text().contains("music generation is off"));
+    dialog->close();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+
+    // With generation on, the same control no longer detours through settings.
+    generation.kept = {true, "ace-step-1.5", "/models/ace"};
+    generate->click();
+    CHECK(window.findChild<ui::SettingsDialog*>() == nullptr);
+}
+
+namespace {
+
+// Whether the Function file the dialog's switchboard built holds `name`.
+bool offered(const ui::SettingsDialog& dialog, std::string_view name) {
+    const auto& entries = dialog.switchboard()->file().entries;
+    return std::any_of(entries.begin(), entries.end(),
+                       [name](auto* d) { return d->name == name; });
+}
+
+}  // namespace
+
+TEST_CASE("turning generation on in Settings makes generate_sample offered on the next open") {
+    auto ids = make_fixture();
+    ProjectHistory history(std::move(ids.project));
+    StubTransport transport;
+    StubAudition audition;
+    StubRecorder recorder;
+    assistant::FunctionToggles toggles;
+    StubGenerationStore generation;
+    ui::MainWindow window(history, transport, audition, recorder, toggles, generation, "Test");
+    window.show();
+    (void)QTest::qWaitForWindowExposed(&window);
+
+    window.open_settings();
+    auto* dialog = window.findChild<ui::SettingsDialog*>();
+    REQUIRE(dialog);
+    CHECK_FALSE(offered(*dialog, "generate_sample"));
+
+    auto* page = dialog->findChild<ui::GenerationSettingsPage*>();
+    REQUIRE(page);
+    page->findChild<QRadioButton*>("generation_model_ace-step-1.5")->click();
+    page->findChild<QLineEdit*>("generation_weights_ace-step-1.5")->setText("/models/ace");
+    page->findChild<QCheckBox*>("generation_acknowledge")->click();
+    page->findChild<QPushButton*>("generation_on")->click();
+    CHECK(generation.kept.enabled);
+    dialog->close();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+
+    window.open_settings();
+    dialog = window.findChild<ui::SettingsDialog*>();
+    REQUIRE(dialog);
+    CHECK(offered(*dialog, "generate_sample"));
+}
+
+// Round-2 wiring: the capability is derived from the store, not set by
+// hand, so a store that says "on" with a model no longer in the list must
+// read as off everywhere it is derived (the switchboard and the Generate
+// route), not only on the page that explains it.
+TEST_CASE("a store that is on with a removed model derives no capability and still guides") {
+    auto ids = make_fixture();
+    ProjectHistory history(std::move(ids.project));
+    StubTransport transport;
+    StubAudition audition;
+    StubRecorder recorder;
+    assistant::FunctionToggles toggles;
+    StubGenerationStore generation;
+    generation.kept = {true, "model-that-was-removed", "/models/gone"};
+    ui::MainWindow window(history, transport, audition, recorder, toggles, generation, "Test");
+    window.show();
+    (void)QTest::qWaitForWindowExposed(&window);
+
+    window.request_generation();
+    auto* dialog = window.findChild<ui::SettingsDialog*>();
+    REQUIRE(dialog);
+    CHECK(dialog->isVisible());
+    // Opened, not executed: the surface that sent the user here is not blocked.
+    CHECK(dialog->windowModality() != Qt::ApplicationModal);
+    CHECK_FALSE(offered(*dialog, "generate_sample"));
+    auto* page = dialog->findChild<ui::GenerationSettingsPage*>();
+    REQUIRE(page);
+    CHECK(page->isVisible());
+    CHECK(page->findChild<QLabel*>("generation_removed") != nullptr);
+
+    // Turning it off from the guided tab reaches the main window's status bar
+    // through the dialog's relay, and the store agrees.
+    page->findChild<QPushButton*>("generation_off")->click();
+    CHECK_FALSE(generation.kept.enabled);
+    CHECK(window.statusBar()->currentMessage() == "Music generation is off.");
+    dialog->close();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
 }

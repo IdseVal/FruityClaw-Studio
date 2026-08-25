@@ -5,9 +5,13 @@ add_executable(app
   audio_session.cpp
   demo_project.cpp
   toggle_file.cpp
+  generation_file.cpp
 )
 target_compile_definitions(app PRIVATE
   FCS_PRODUCT_NAME_STR="${FCS_PRODUCT_NAME}"
   FCS_APP_ID_STR="${FCS_APP_ID}")
 target_link_libraries(app PRIVATE core engine audioio assistant ui)
+if(WIN32)
+  target_link_libraries(app PRIVATE crypt32)  # DPAPI seals the generation key
+endif()
 set_target_properties(app PROPERTIES OUTPUT_NAME ${FCS_APP_ID})
