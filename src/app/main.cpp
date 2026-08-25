@@ -5,6 +5,7 @@
 
 #include "app/audio_session.h"
 #include "app/demo_project.h"
+#include "app/toggle_file.h"
 #include "audioio/portaudio_device.h"
 #include "core/history.h"
 #include "engine/engine.h"
@@ -13,6 +14,8 @@
 
 int main(int argc, char** argv) {
     QApplication qt_app(argc, argv);
+    // Config and data paths derive from the app id, never the product name.
+    QCoreApplication::setApplicationName(FCS_APP_ID_STR);
 
     core::ProjectHistory history(app::make_demo_project());
     engine::Engine player;
@@ -31,7 +34,10 @@ int main(int argc, char** argv) {
         player.publish(history.read(), session.sample_rate());
     });
 
-    ui::MainWindow window(history, player, player, session, FCS_PRODUCT_NAME_STR);
+    assistant::FunctionToggles toggles = app::load_toggles();
+    ui::MainWindow window(history, player, player, session, toggles, FCS_PRODUCT_NAME_STR);
+    QObject::connect(&window, &ui::MainWindow::toggles_changed,
+                     [&toggles] { app::save_toggles(toggles); });
     window.show();
 
     int result = qt_app.exec();

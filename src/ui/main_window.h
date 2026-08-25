@@ -6,6 +6,7 @@
 
 #include <QMainWindow>
 
+#include "assistant/function_file.h"
 #include "core/history.h"
 #include "core/playback.h"
 
@@ -25,7 +26,18 @@ class MainWindow : public QMainWindow {
 public:
     MainWindow(core::ProjectHistory& history, core::TransportPort& transport,
                core::AuditionPort& audition, core::RecorderPort& recorder,
-               const QString& product_name, QWidget* parent = nullptr);
+               assistant::FunctionToggles& toggles, const QString& product_name,
+               QWidget* parent = nullptr);
+
+    // Capabilities the settings tab reports against; off until the
+    // generation settings page (issue #20) turns it on.
+    void set_capabilities(assistant::Capabilities capabilities) { capabilities_ = capabilities; }
+
+    void open_settings();
+
+signals:
+    // A Function toggle was written; the composition root persists the store.
+    void toggles_changed();
 
 private:
     void refresh_transport();
@@ -33,6 +45,8 @@ private:
 
     core::ProjectHistory& history_;
     core::TransportPort& transport_;
+    assistant::FunctionToggles& toggles_;
+    assistant::Capabilities capabilities_;
 
     ArrangementView* arrangement_view_ = nullptr;
     PatternPalette* palette_ = nullptr;

@@ -12,6 +12,7 @@ add_executable(core_tests
   test_sample_functions.cpp
   test_engine.cpp
   test_engine_stress.cpp
+  test_function_file.cpp
   test_recorder.cpp
   test_audio_session.cpp
   # The RecorderPort implementation lives in the composition root. It needs
@@ -19,7 +20,7 @@ add_executable(core_tests
   # adapter and runs headless.
   ${CMAKE_SOURCE_DIR}/src/app/audio_session.cpp
 )
-target_link_libraries(core_tests PRIVATE core engine Catch2::Catch2WithMain)
+target_link_libraries(core_tests PRIVATE core engine assistant Catch2::Catch2WithMain)
 
 include(CTest)
 include(Catch)
@@ -31,7 +32,10 @@ catch_discover_tests(core_tests)
 if(TARGET ui)
   find_package(Qt6 COMPONENTS Test QUIET)
   if(Qt6Test_FOUND)
-    add_executable(ui_tests test_ui.cpp)
+    # toggle_file.cpp is the composition root's persistence for the toggle
+    # store; it is compiled in here so its load/save round trip is tested
+    # against a QStandardPaths test-mode directory, never the real config.
+    add_executable(ui_tests test_ui.cpp ${CMAKE_SOURCE_DIR}/src/app/toggle_file.cpp)
     target_link_libraries(ui_tests PRIVATE ui Catch2::Catch2 Qt6::Test)
     # Qt's DLLs are not on PATH on Windows; point discovery and the tests at
     # the installed Qt bin directory.
