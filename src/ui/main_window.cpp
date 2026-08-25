@@ -1,6 +1,7 @@
 #include "ui/main_window.h"
 
 #include <QHBoxLayout>
+#include <QVBoxLayout>
 #include <QKeySequence>
 #include <QLabel>
 #include <QSplitter>
@@ -11,12 +12,26 @@
 
 #include "ui/arrangement_view.h"
 #include "ui/pattern_palette.h"
+#include "ui/sample_browser.h"
 #include "ui/theme.h"
 
 namespace ui {
+namespace {
+
+// The sidebar's section eyebrow: what the panel below it holds.
+QLabel* section_header(const QString& text, QWidget* parent) {
+    auto* label = new QLabel(text.toUpper(), parent);
+    label->setStyleSheet(QString("color: %1; background: %2; font-size: 10px;"
+                                 " letter-spacing: 1px; padding: 6px 8px 2px 8px;")
+                             .arg(theme::kTextSecondary.name(), theme::kPanel.name()));
+    return label;
+}
+
+}  // namespace
 
 MainWindow::MainWindow(core::ProjectHistory& history, core::TransportPort& transport,
-                       const QString& product_name, QWidget* parent)
+                       core::AuditionPort& audition, const QString& product_name,
+                       QWidget* parent)
     : QMainWindow(parent), history_(history), transport_(transport) {
     setWindowTitle(product_name);
     resize(1200, 640);
@@ -85,16 +100,40 @@ MainWindow::MainWindow(core::ProjectHistory& history, core::TransportPort& trans
     redo_button->setDefaultAction(redo_action_);
     bar->addWidget(redo_button);
 
-    // --- centre: palette | arrangement -------------------------------------
+    // --- centre: sidebar (Samples over Patterns) | arrangement ---------------
     auto* splitter = new QSplitter(this);
-    palette_ = new PatternPalette(history_, splitter);
+
+    auto* sidebar = new QSplitter(Qt::Vertical, splitter);
+    auto* samples_section = new QWidget(sidebar);
+    samples_ = new SampleBrowser(history_, audition, samples_section);
+    auto* samples_layout = new QVBoxLayout(samples_section);
+    samples_layout->setContentsMargins(0, 0, 0, 0);
+    samples_layout->setSpacing(0);
+    samples_layout->addWidget(section_header("Samples", samples_section));
+    samples_layout->addWidget(samples_, 1);
+
+    auto* patterns_section = new QWidget(sidebar);
+    palette_ = new PatternPalette(history_, patterns_section);
+    auto* patterns_layout = new QVBoxLayout(patterns_section);
+    patterns_layout->setContentsMargins(0, 0, 0, 0);
+    patterns_layout->setSpacing(0);
+    patterns_layout->addWidget(section_header("Patterns", patterns_section));
+    patterns_layout->addWidget(palette_, 1);
+
+    sidebar->addWidget(samples_section);
+    sidebar->addWidget(patterns_section);
+    sidebar->setSizes({360, 240});
+
     arrangement_view_ = new ArrangementView(history_, transport_, splitter);
-    splitter->addWidget(palette_);
+    splitter->addWidget(sidebar);
     splitter->addWidget(arrangement_view_);
     splitter->setStretchFactor(0, 0);
     splitter->setStretchFactor(1, 1);
-    splitter->setSizes({170, 1030});
+    splitter->setSizes({220, 980});
     setCentralWidget(splitter);
+
+    connect(samples_, &SampleBrowser::hint_changed, this,
+            [this](const QString& hint) { statusBar()->showMessage(hint); });
 
     connect(palette_, &PatternPalette::armed_changed, this,
             [this] { arrangement_view_->set_armed_pattern(palette_->armed()); });

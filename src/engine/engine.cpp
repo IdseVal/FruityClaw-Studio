@@ -16,17 +16,29 @@ void Engine::publish(const core::Project& project, double sample_rate) {
     std::shared_ptr<const RenderModel> next = bake(project, sample_rate);
 
     current_.store(next.get(), std::memory_order_release);
-    if (published_) {
-        retired_.push_back({std::move(published_), audio_epoch_.load(std::memory_order_acquire)});
-    }
+    if (published_) retire(std::move(published_));
     published_ = std::move(next);
+}
 
-    // A retired model is deletable once the audio thread has completed two
+void Engine::audition(core::SampleSource audio) {
+    if (!audio || audio->frame_count() < 2) return;
+    auto cue = std::make_shared<AuditionCue>();
+    cue->audio = std::move(audio);
+    cue->rate = cue->audio->sample_rate / sample_rate_;
+
+    audition_pending_.store(cue.get(), std::memory_order_release);
+    if (auditioning_) retire(std::move(auditioning_));
+    auditioning_ = std::move(cue);
+}
+
+void Engine::retire(std::shared_ptr<const void> object) {
+    // A retired object is deletable once the audio thread has completed two
     // callbacks since retirement: the swap happened before or during the
     // first, so by the second it can no longer be in use. When the stream is
-    // not running the epoch does not advance and models are reclaimed on the
-    // next publish after the stream stops, which is bounded and harmless.
+    // not running the epoch does not advance and objects are reclaimed on the
+    // next hand-over after the stream stops, which is bounded and harmless.
     std::uint64_t epoch = audio_epoch_.load(std::memory_order_acquire);
+    retired_.push_back({std::move(object), epoch});
     std::erase_if(retired_, [epoch](const Retired& r) { return epoch >= r.epoch + 2; });
 }
 
@@ -128,6 +140,41 @@ void Engine::render_voices(const RenderModel& model, float* const* output,
     }
 }
 
+void Engine::render_audition(float* const* output, int output_channels, int frames) {
+    // Every block takes the pending cue, so a retired cue is provably unused
+    // one callback after its replacement was handed over.
+    if (const AuditionCue* next = audition_pending_.exchange(nullptr, std::memory_order_acq_rel)) {
+        audition_cue_ = next;
+        audition_pos_ = 0.0;
+    }
+    if (!audition_cue_) return;
+
+    const core::AudioData& audio = *audition_cue_->audio;
+    std::int64_t last_frame = audio.frame_count();
+    for (int i = 0; i < frames; ++i) {
+        std::int64_t frame = static_cast<std::int64_t>(audition_pos_);
+        if (frame + 1 >= last_frame) {
+            audition_cue_ = nullptr;
+            return;
+        }
+        float frac = static_cast<float>(audition_pos_ - static_cast<double>(frame));
+        float left, right;
+        if (audio.channels >= 2) {
+            const float* s0 = &audio.frames[static_cast<std::size_t>(frame) * audio.channels];
+            const float* s1 = s0 + audio.channels;
+            left = s0[0] + frac * (s1[0] - s0[0]);
+            right = s0[1] + frac * (s1[1] - s0[1]);
+        } else {
+            float a = audio.frames[static_cast<std::size_t>(frame)];
+            float b = audio.frames[static_cast<std::size_t>(frame) + 1];
+            left = right = a + frac * (b - a);
+        }
+        output[0][i] += left * kAuditionGain;
+        if (output_channels > 1) output[1][i] += right * kAuditionGain;
+        audition_pos_ += audition_cue_->rate;
+    }
+}
+
 void Engine::render(float* const* output, int output_channels, int frames) {
     for (int c = 0; c < output_channels; ++c)
         std::fill_n(output[c], frames, 0.0f);
@@ -177,6 +224,8 @@ void Engine::render(float* const* output, int output_channels, int frames) {
         position_ = block_end;
         playhead_samples_.store(position_, std::memory_order_release);
     }
+
+    render_audition(output, output_channels, frames);
 
     audio_epoch_.fetch_add(1, std::memory_order_acq_rel);
 }

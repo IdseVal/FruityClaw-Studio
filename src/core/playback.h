@@ -5,6 +5,7 @@
 // by the engine and handed to the UI by the composition root.
 #pragma once
 
+#include "core/entities.h"
 #include "core/primitives.h"
 
 namespace core {
@@ -27,6 +28,18 @@ public:
     // Snapshot of the last published transport state; safe to poll on a UI
     // timer.
     virtual PlaybackStatus status() const = 0;
+};
+
+// The audition command: play one Sample once, now, at its native pitch,
+// independent of the transport. It is what the Sample sidebar does when a
+// Sample is clicked (core document section 3.7). A second audition replaces
+// the first. Like every structural hand-over across seam C, the audio is a
+// ready-made immutable object the audio thread only swaps a pointer to.
+class AuditionPort {
+public:
+    virtual ~AuditionPort() = default;
+
+    virtual void audition(SampleSource audio) = 0;
 };
 
 }  // namespace core

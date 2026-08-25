@@ -1,7 +1,8 @@
 // Interaction tests for the Qt layer, from the confirmed FMEA table
 // (tests/FMEA-arrangement-view.md, PR #30 interview): ArrangementView
 // geometry and hit-testing, drag commit atomicity, rename-editor failure
-// routing, and MainWindow's undo/redo and transport bindings.
+// routing, MainWindow's undo/redo and transport bindings, and the Sample
+// sidebar (issue #12): audition, provenance mark, placing into a Pattern.
 //
 // Runs on the offscreen platform; simulated input only. The tests replicate
 // the view's layout constants (header 160 px, ruler 28 px, track 56 px,
@@ -14,6 +15,8 @@
 #include <QApplication>
 #include <QLabel>
 #include <QLineEdit>
+#include <QListWidget>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QSignalSpy>
 #include <QToolButton>
@@ -25,6 +28,7 @@
 #include "test_support.h"
 #include "ui/arrangement_view.h"
 #include "ui/main_window.h"
+#include "ui/sample_browser.h"
 
 using namespace core;
 using namespace core::functions;
@@ -54,6 +58,41 @@ struct StubTransport : TransportPort {
         current.position = position;
     }
     PlaybackStatus status() const override { return current; }
+};
+
+struct StubAudition : AuditionPort {
+    std::vector<SampleSource> played;
+    void audition(SampleSource audio) override { played.push_back(std::move(audio)); }
+};
+
+// The sidebar over the fixture plus one AI-generated Sample (section 6.3).
+struct BrowserFixture {
+    test_support::Fixture ids = make_fixture();
+    Id generated_sample;
+    ProjectHistory history;
+    StubAudition audition;
+    ui::SampleBrowser browser;
+    QListWidget* list = nullptr;
+
+    static Project with_generated(Project project, Id& id) {
+        Sample generated{new_id(), "Riser", test_support::make_tone(0.2, 440.0),
+                         Provenance::generated("test-model", 1700000000)};
+        id = generated.id;
+        project.samples.items.push_back(generated);
+        return project;
+    }
+
+    BrowserFixture()
+        : history(with_generated(std::move(ids.project), generated_sample)),
+          browser(history, audition) {
+        browser.resize(220, 400);
+        browser.show();
+        (void)QTest::qWaitForWindowExposed(&browser);
+        list = browser.findChild<QListWidget*>();
+        REQUIRE(list);
+    }
+
+    QPoint row_centre(int row) const { return list->visualItemRect(list->item(row)).center(); }
 };
 
 // A move event with the left button held, which QTest::mouseMove cannot send.
@@ -267,7 +306,8 @@ TEST_CASE("MainWindow's undo and redo actions follow HistoryState") {
     auto ids = make_fixture();
     ProjectHistory history(std::move(ids.project));
     StubTransport transport;
-    ui::MainWindow window(history, transport, "Test");
+    StubAudition audition;
+    ui::MainWindow window(history, transport, audition, "Test");
     window.show();
     (void)QTest::qWaitForWindowExposed(&window);
 
@@ -304,7 +344,8 @@ TEST_CASE("MainWindow's transport poll reflects the port's status") {
     auto ids = make_fixture();
     ProjectHistory history(std::move(ids.project));
     StubTransport transport;
-    ui::MainWindow window(history, transport, "Test");
+    StubAudition audition;
+    ui::MainWindow window(history, transport, audition, "Test");
     window.show();
     (void)QTest::qWaitForWindowExposed(&window);
 
@@ -327,6 +368,194 @@ TEST_CASE("MainWindow's transport poll reflects the port's status") {
 
     CHECK(play_button->text() == "Stop");
     CHECK(position_label->text().trimmed() == "002.3");
+}
+
+TEST_CASE("the sidebar lists every Sample and clicking one auditions it") {
+    BrowserFixture f;
+    REQUIRE(f.list->count() == 3);
+    CHECK(f.list->item(0)->text().startsWith("hit"));
+    CHECK(f.list->item(0)->text().endsWith("0.10 s"));
+
+    QTest::mouseClick(f.list->viewport(), Qt::LeftButton, {}, f.row_centre(1));
+    REQUIRE(f.audition.played.size() == 1);
+    CHECK(f.audition.played[0] == f.history.read().samples.items[1].source);
+    CHECK(f.browser.selected() == f.history.read().samples.items[1].id);
+    CHECK_FALSE(f.history.state().can_undo);  // hearing is not a mutation
+}
+
+TEST_CASE("only an AI-generated Sample carries the provenance mark") {
+    BrowserFixture f;
+    CHECK(f.list->item(0)->data(Qt::AccessibleDescriptionRole).toString().isEmpty());
+    CHECK(f.list->item(1)->data(Qt::AccessibleDescriptionRole).toString().isEmpty());
+    CHECK(f.list->item(2)->data(Qt::AccessibleDescriptionRole).toString() == "AI-generated");
+    CHECK(f.list->item(2)->toolTip().contains("test-model"));
+    CHECK(f.list->item(2)->toolTip().contains("may not be licenseable"));
+    CHECK(f.list->item(0)->toolTip() == "Made by hand");
+
+    // The corner badge is amber (theme accent) on the generated row's icon only.
+    auto accent_pixels = [](const QImage& image) {
+        int count = 0;
+        for (int y = 0; y < image.height(); ++y)
+            for (int x = 0; x < image.width(); ++x)
+                if (image.pixelColor(x, y) == QColor(0xE8, 0xA1, 0x3C)) ++count;
+        return count;
+    };
+    CHECK(accent_pixels(f.list->item(2)->icon().pixmap(36, 22).toImage()) > 20);
+    CHECK(accent_pixels(f.list->item(0)->icon().pixmap(36, 22).toImage()) == 0);
+}
+
+TEST_CASE("opening a generated Sample states its provenance in words") {
+    BrowserFixture f;
+    f.list->setCurrentRow(2);
+    emit f.list->itemActivated(f.list->item(2));
+    QLabel* provenance = f.browser.findChild<QLabel*>("provenance");
+    REQUIRE(provenance);
+    CHECK(provenance->text().startsWith("AI-generated by test-model on 2023-11-14"));
+}
+
+TEST_CASE("the filter narrows the list by name") {
+    BrowserFixture f;
+    QLineEdit* filter = f.browser.findChild<QLineEdit*>();
+    REQUIRE(filter);
+    filter->setText("TON");
+    REQUIRE(f.list->count() == 1);
+    CHECK(f.list->item(0)->text().startsWith("tone"));
+    filter->clear();
+    CHECK(f.list->count() == 3);
+}
+
+TEST_CASE("placing a Sample into a Pattern is one undoable step") {
+    BrowserFixture f;
+    Project before = f.history.read();
+    f.list->setCurrentRow(2);  // the Riser: no Instrument plays it yet
+
+    SECTION("a Sample without an Instrument gets one, then a lane") {
+        f.browser.place_selected_in(f.ids.drum_pattern);
+
+        const Project& p = f.history.read();
+        REQUIRE(p.instruments.items.size() == 3);
+        CHECK(p.instruments.items.back().name == "Riser");
+        CHECK(p.instruments.items.back().params.sample == f.generated_sample);
+        const Pattern* drums = p.patterns.find(f.ids.drum_pattern);
+        REQUIRE(drums->parts.size() == 2);
+        CHECK(drums->parts.back().instrument == p.instruments.items.back().id);
+        CHECK(drums->parts.back().events.empty());
+        CHECK(f.history.state().undo_label == "Place 'Riser' in 'Drums A'");
+
+        REQUIRE(f.history.undo());
+        CHECK(f.history.read() == before);
+    }
+
+    SECTION("a Sample already played by an Instrument reuses it") {
+        f.list->setCurrentRow(1);  // tone: played by 'Keys'
+        f.browser.place_selected_in(f.ids.drum_pattern);
+        const Project& p = f.history.read();
+        CHECK(p.instruments.items.size() == 2);
+        const Pattern* drums = p.patterns.find(f.ids.drum_pattern);
+        REQUIRE(drums->parts.size() == 2);
+        CHECK(drums->parts.back().instrument == p.instruments.items[1].id);
+    }
+
+    SECTION("a Sample already in the Pattern is a hint, not a Delta") {
+        QSignalSpy hints(&f.browser, &ui::SampleBrowser::hint_changed);
+        f.list->setCurrentRow(0);  // hit: already the drum Pattern's lane
+        f.browser.place_selected_in(f.ids.drum_pattern);
+        CHECK(f.history.read() == before);
+        CHECK_FALSE(f.history.state().can_undo);
+        REQUIRE(!hints.isEmpty());
+        CHECK(hints.last().at(0).toString() == "'hit' is already in 'Drums A'.");
+    }
+
+    SECTION("the place menu offers every Pattern and acts on the selection") {
+        QToolButton* button = nullptr;
+        for (QToolButton* candidate : f.browser.findChildren<QToolButton*>()) {
+            if (candidate->menu()) button = candidate;
+        }
+        REQUIRE(button);
+        CHECK(button->isEnabled());
+        REQUIRE(button->menu()->actions().size() == 2);
+        CHECK(button->menu()->actions()[1]->text() == "Melody A");
+        button->menu()->actions()[1]->trigger();
+        CHECK(f.history.read().patterns.find(f.ids.melody_pattern)->parts.size() == 2);
+        CHECK(f.history.state().undo_label == "Place 'Riser' in 'Melody A'");
+    }
+}
+
+TEST_CASE("placing under an active filter acts on the Sample shown, not the row number") {
+    BrowserFixture f;
+    QLineEdit* filter = f.browser.findChild<QLineEdit*>();
+    REQUIRE(filter);
+    filter->setText("ris");  // only the Riser remains, now at row 0
+    REQUIRE(f.list->count() == 1);
+    f.list->setCurrentRow(0);
+    CHECK(f.browser.selected() == f.generated_sample);
+
+    QSignalSpy hints(&f.browser, &ui::SampleBrowser::hint_changed);
+    f.browser.place_selected_in(f.ids.melody_pattern);
+
+    const Project& p = f.history.read();
+    REQUIRE(p.instruments.items.size() == 3);
+    CHECK(p.instruments.items.back().params.sample == f.generated_sample);
+    const Pattern* melody = p.patterns.find(f.ids.melody_pattern);
+    REQUIRE(melody->parts.size() == 2);
+    CHECK(melody->parts.back().instrument == p.instruments.items.back().id);
+    CHECK(hints.last().at(0).toString() == "Placed 'Riser' in 'Melody A'.");
+
+    // The filtered view survives the reload the placement triggered, with
+    // the placed Sample still selected, and clears back to the full list.
+    CHECK(f.list->count() == 1);
+    CHECK(f.browser.selected() == f.generated_sample);
+    filter->clear();
+    CHECK(f.list->count() == 3);
+    CHECK(f.browser.selected() == f.generated_sample);
+}
+
+TEST_CASE("the sidebar follows the History: undo takes a placed lane back, selection kept") {
+    BrowserFixture f;
+    f.list->setCurrentRow(1);
+    f.browser.place_selected_in(f.ids.drum_pattern);
+    REQUIRE(f.history.read().patterns.find(f.ids.drum_pattern)->parts.size() == 2);
+
+    REQUIRE(f.history.undo());
+    CHECK(f.history.read().patterns.find(f.ids.drum_pattern)->parts.size() == 1);
+    CHECK(f.list->count() == 3);
+    CHECK(f.browser.selected() == f.history.read().samples.items[1].id);
+
+    // Nothing selected: placing is a no-op and the button is disabled.
+    f.list->clearSelection();
+    f.list->setCurrentItem(nullptr);
+    CHECK_FALSE(f.browser.selected().has_value());
+    Project before = f.history.read();
+    f.browser.place_selected_in(f.ids.drum_pattern);
+    CHECK(f.history.read() == before);
+    QToolButton* button = nullptr;
+    for (QToolButton* candidate : f.browser.findChildren<QToolButton*>()) {
+        if (candidate->menu()) button = candidate;
+    }
+    REQUIRE(button);
+    CHECK_FALSE(button->isEnabled());
+}
+
+TEST_CASE("a Sample without audio lists, opens, and is handed to the port as absent") {
+    auto ids = make_fixture();
+    ids.project.samples.items.push_back(Sample{new_id(), "silent", nullptr, Provenance::human()});
+    ProjectHistory history(std::move(ids.project));
+    StubAudition audition;
+    ui::SampleBrowser browser(history, audition);
+    browser.show();
+    (void)QTest::qWaitForWindowExposed(&browser);
+    QListWidget* list = browser.findChild<QListWidget*>();
+    REQUIRE(list);
+    REQUIRE(list->count() == 3);
+    CHECK(list->item(2)->text() == "silent");
+
+    QTest::mouseClick(list->viewport(), Qt::LeftButton, {}, list->visualItemRect(list->item(2)).center());
+    REQUIRE(audition.played.size() == 1);
+    CHECK(audition.played[0] == nullptr);
+    emit list->itemActivated(list->item(2));  // opening must not dereference the source
+    QLabel* provenance = browser.findChild<QLabel*>("provenance");
+    REQUIRE(provenance);
+    CHECK(provenance->text() == "Made by hand");
 }
 
 int main(int argc, char** argv) {

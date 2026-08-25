@@ -1,5 +1,6 @@
 // The main window shell around the Arrangement view: transport bar with
-// play/stop, position readout, tempo, and undo/redo driven by the History.
+// play/stop, position readout, tempo, undo/redo driven by the History, and
+// the sidebar — Samples above Patterns — on the left.
 #pragma once
 
 #include <QMainWindow>
@@ -14,13 +15,15 @@ namespace ui {
 
 class ArrangementView;
 class PatternPalette;
+class SampleBrowser;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
 
 public:
     MainWindow(core::ProjectHistory& history, core::TransportPort& transport,
-               const QString& product_name, QWidget* parent = nullptr);
+               core::AuditionPort& audition, const QString& product_name,
+               QWidget* parent = nullptr);
 
 private:
     void refresh_transport();
@@ -31,6 +34,7 @@ private:
 
     ArrangementView* arrangement_view_ = nullptr;
     PatternPalette* palette_ = nullptr;
+    SampleBrowser* samples_ = nullptr;
     QToolButton* play_button_ = nullptr;
     QLabel* position_label_ = nullptr;
     QLabel* tempo_label_ = nullptr;

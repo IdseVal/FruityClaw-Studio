@@ -180,3 +180,150 @@ TEST_CASE("offline render throughput is comfortably realtime") {
                      << realtime_factor << "x realtime)");
     CHECK(realtime_factor > 10.0);
 }
+
+TEST_CASE("an audition is audible while the transport is stopped and replaces itself") {
+    auto f = make_fixture();
+    SampleSource tone = f.project.samples.items[1].source;  // 0.5 s
+    SampleSource hit = f.project.samples.items[0].source;   // 0.1 s
+    ProjectHistory history(std::move(f.project));
+    engine::Engine player;
+    player.publish(history.read(), kRate);
+
+    // Silent before; nothing is placed and nothing is playing.
+    CHECK(render_blocks(player, 2, 512).back() == 0.0);
+    CHECK_FALSE(player.status().playing);
+
+    player.audition(tone);
+    std::vector<double> loud = render_blocks(player, 4, 512);
+    CHECK(loud.front() > 0.01);
+    CHECK(player.status().position == 0);  // the transport did not move
+
+    // A second cue replaces the first, so a short hit ends the sound early:
+    // 0.1 s is 4800 frames, silence well inside 20 blocks of 512.
+    player.audition(hit);
+    std::vector<double> after = render_blocks(player, 20, 512);
+    CHECK(after.front() > 0.01);
+    CHECK(after.back() == 0.0);
+
+    // Retired cues are reclaimed by epoch, never while they could be playing.
+    for (int i = 0; i < 8; ++i) {
+        player.audition(i % 2 ? tone : hit);
+        render_blocks(player, 1, 64);
+    }
+    CHECK(std::isfinite(render_blocks(player, 1, 512).back()));
+}
+
+namespace {
+
+// A constant-level DC "sample" so channel and duration assertions are exact.
+SampleSource make_level(double seconds, double rate, int channels, float left, float right) {
+    auto audio = std::make_shared<AudioData>();
+    audio->sample_rate = rate;
+    audio->channels = channels;
+    auto frames = static_cast<std::size_t>(seconds * rate);
+    audio->frames.resize(frames * static_cast<std::size_t>(channels));
+    for (std::size_t f = 0; f < frames; ++f) {
+        audio->frames[f * channels] = left;
+        if (channels > 1) audio->frames[f * channels + 1] = right;
+    }
+    return audio;
+}
+
+// Renders one block and returns both channels.
+std::pair<std::vector<float>, std::vector<float>> render_stereo(engine::Engine& player,
+                                                                int block_frames) {
+    std::vector<float> left(static_cast<std::size_t>(block_frames));
+    std::vector<float> right(static_cast<std::size_t>(block_frames));
+    float* channels[2] = {left.data(), right.data()};
+    player.render(channels, 2, block_frames);
+    return {left, right};
+}
+
+}  // namespace
+
+TEST_CASE("an audition plays at native pitch: a 96 kHz Sample lasts half its frames at 48 kHz") {
+    auto f = make_fixture();
+    ProjectHistory history(std::move(f.project));
+    engine::Engine player;
+    player.publish(history.read(), kRate);
+
+    // 0.1 s of audio at 96 kHz is 9600 frames but must occupy 4800 output
+    // frames: audible through block 9 of 512, silent by block 12.
+    player.audition(make_level(0.1, 96000.0, 1, 0.5f, 0.5f));
+    std::vector<double> rms = render_blocks(player, 12, 512);
+    CHECK(rms[8] > 0.3);
+    CHECK(rms[10] == 0.0);
+    CHECK(rms[11] == 0.0);
+
+    // The same 0.1 s at 24 kHz stretches to 4800 output frames as well.
+    player.audition(make_level(0.1, 24000.0, 1, 0.5f, 0.5f));
+    rms = render_blocks(player, 12, 512);
+    CHECK(rms[8] > 0.3);
+    CHECK(rms[10] == 0.0);
+}
+
+TEST_CASE("an audition keeps a stereo Sample's channels apart and centres a mono one") {
+    auto f = make_fixture();
+    ProjectHistory history(std::move(f.project));
+    engine::Engine player;
+    player.publish(history.read(), kRate);
+
+    player.audition(make_level(0.05, kRate, 2, 0.5f, -0.25f));
+    auto [left, right] = render_stereo(player, 64);
+    CHECK(left[10] == Catch::Approx(0.5f * 0.8f));
+    CHECK(right[10] == Catch::Approx(-0.25f * 0.8f));
+
+    player.audition(make_level(0.05, kRate, 1, 0.5f, 0.0f));
+    std::tie(left, right) = render_stereo(player, 64);
+    CHECK(left[10] == Catch::Approx(0.5f * 0.8f));
+    CHECK(right[10] == Catch::Approx(0.5f * 0.8f));
+
+    // A mono output gets the left channel and nothing is written out of bounds.
+    std::vector<float> mono(64);
+    float* one[1] = {mono.data()};
+    player.audition(make_level(0.05, kRate, 2, 0.5f, -0.25f));
+    player.render(one, 1, 64);
+    CHECK(mono[10] == Catch::Approx(0.5f * 0.8f));
+}
+
+TEST_CASE("an audition mixes over a running transport without disturbing it") {
+    auto f = make_fixture();
+    ProjectHistory history(std::move(f.project));
+    auto placed = add_placement(history.read(), f.arrangement, f.track_a, f.drum_pattern, 0);
+    REQUIRE(placed.ok());
+    REQUIRE(history.apply(std::move(placed->delta)) == ApplyResult::Applied);
+
+    // A twin engine renders the same blocks without a cue: the reference for
+    // what the transport reports when nothing is auditioning.
+    engine::Engine player, twin;
+    for (engine::Engine* e : {&player, &twin}) {
+        e->publish(history.read(), kRate);
+        e->play();
+        render_blocks(*e, 4, 512);
+    }
+    REQUIRE(player.status().position > 0);
+
+    // A DC cue lifts the block mean; the transport keeps counting as if it
+    // were not there.
+    player.audition(make_level(0.05, kRate, 1, 0.5f, 0.5f));
+    auto [left, right] = render_stereo(player, 512);
+    render_stereo(twin, 512);
+    double mean = 0.0;
+    for (float v : left) mean += v;
+    mean /= 512.0;
+    CHECK(mean > 0.3);
+    CHECK(player.status().playing);
+    CHECK(player.status().position == twin.status().position);
+}
+
+TEST_CASE("an empty or absent Sample is not auditioned and does not silence the current cue") {
+    auto f = make_fixture();
+    ProjectHistory history(std::move(f.project));
+    engine::Engine player;
+    player.publish(history.read(), kRate);
+
+    player.audition(make_level(0.05, kRate, 1, 0.5f, 0.5f));
+    player.audition(nullptr);
+    player.audition(std::make_shared<AudioData>());
+    CHECK(render_blocks(player, 1, 64).front() > 0.3);
+}
