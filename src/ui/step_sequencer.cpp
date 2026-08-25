@@ -453,7 +453,15 @@ void StepSequencer::reload() {
 
 void StepSequencer::add_pattern() {
     const core::Project& project = history_.read();
-    std::string name = "Pattern " + std::to_string(project.patterns.items.size() + 1);
+    // The first "Pattern N" not already taken, so removing one never makes
+    // the next one repeat a name.
+    std::string name;
+    for (std::size_t n = project.patterns.items.size() + 1;; ++n) {
+        name = "Pattern " + std::to_string(n);
+        bool taken = false;
+        for (const core::Pattern& pat : project.patterns.items) taken |= pat.name == name;
+        if (!taken) break;
+    }
     auto created = create_pattern(project, name, 1);
     if (!created.ok()) {
         emit hint_changed(QString::fromStdString(created.error));
