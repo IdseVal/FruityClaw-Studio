@@ -3,13 +3,78 @@
 #include <algorithm>
 #include <unordered_map>
 
+#include "core/effect_schema.h"
+
 namespace engine {
 
-std::shared_ptr<const RenderModel> bake(const core::Project& project, double sample_rate) {
+std::shared_ptr<Processor> ProcessorPool::acquire(const core::Effect& effect,
+                                                  double sample_rate, int max_block_frames) {
+    if (!factory_) return nullptr;
+    Entry& entry = entries_[effect.id];
+    if (entry.processor && entry.sample_rate != sample_rate) {
+        // Re-preparing a Processor the audio thread may be inside is not
+        // safe; a fresh one is, and the old one is retired like any other.
+        replaced_.push_back(std::move(entry.processor));
+    }
+    if (!entry.processor) {
+        entry.processor = factory_(effect.type);
+        if (!entry.processor) return nullptr;
+        entry.processor->prepare(sample_rate, max_block_frames);
+        entry.sample_rate = sample_rate;
+    }
+    entry.seen = true;
+    return entry.processor;
+}
+
+std::vector<std::shared_ptr<Processor>> ProcessorPool::sweep() {
+    std::vector<std::shared_ptr<Processor>> unused = std::move(replaced_);
+    replaced_.clear();
+    for (auto it = entries_.begin(); it != entries_.end();) {
+        if (it->second.seen) {
+            it->second.seen = false;
+            ++it;
+        } else {
+            unused.push_back(std::move(it->second.processor));
+            it = entries_.erase(it);
+        }
+    }
+    return unused;
+}
+
+namespace {
+
+// The parameter values the Effect's params map holds, in ParamId order, with
+// the schema default standing in for anything the map lacks.
+std::vector<BakedEffect> bake_chain(const std::vector<core::Effect>& chain, ProcessorPool* pool,
+                                    double sample_rate, int max_block_frames) {
+    std::vector<BakedEffect> baked;
+    if (!pool) return baked;
+    for (const core::Effect& effect : chain) {
+        std::shared_ptr<Processor> processor = pool->acquire(effect, sample_rate, max_block_frames);
+        if (!processor) continue;
+        BakedEffect b;
+        b.processor = processor.get();
+        b.enabled = effect.enabled;
+        ParamId id = 0;
+        for (const core::EffectParameter& parameter : core::effect_parameters(effect.type)) {
+            auto it = effect.params.find(std::string(parameter.name));
+            b.values.emplace_back(id++, it == effect.params.end() ? parameter.default_value
+                                                                  : it->second);
+        }
+        baked.push_back(std::move(b));
+    }
+    return baked;
+}
+
+}  // namespace
+
+std::shared_ptr<const RenderModel> bake(const core::Project& project, double sample_rate,
+                                        ProcessorPool* pool, int max_block_frames) {
     auto model = std::make_shared<RenderModel>();
     model->sample_rate = sample_rate;
     model->samples_per_tick =
         sample_rate * 60.0 / (project.tempo * static_cast<double>(core::kPpq));
+    model->master_chain = bake_chain(project.master_chain, pool, sample_rate, max_block_frames);
 
     if (project.arrangements.items.empty()) return model;
     const core::Arrangement& arrangement = project.arrangements.items.front();
@@ -39,6 +104,7 @@ std::shared_ptr<const RenderModel> bake(const core::Project& project, double sam
             static_cast<double>(instrument->params.start_offset) * sample_frames_per_tick);
         baked.end_frame = static_cast<std::int64_t>(
             static_cast<double>(instrument->params.end_offset) * sample_frames_per_tick);
+        baked.chain = bake_chain(instrument->chain, pool, sample_rate, max_block_frames);
 
         std::uint32_t index = static_cast<std::uint32_t>(model->instruments.size());
         model->instruments.push_back(std::move(baked));

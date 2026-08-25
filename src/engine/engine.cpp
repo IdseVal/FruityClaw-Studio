@@ -11,13 +11,21 @@ Engine::~Engine() {
     current_.store(nullptr, std::memory_order_release);
 }
 
+void Engine::set_processor_factory(ProcessorFactory factory) {
+    processors_.set_factory(std::move(factory));
+}
+
 void Engine::publish(const core::Project& project, double sample_rate) {
     sample_rate_ = sample_rate;
-    std::shared_ptr<const RenderModel> next = bake(project, sample_rate);
+    std::shared_ptr<const RenderModel> next =
+        bake(project, sample_rate, &processors_, kMaxBlockFrames);
 
     current_.store(next.get(), std::memory_order_release);
     if (published_) retire(std::move(published_));
     published_ = std::move(next);
+    // Processors the new model no longer references leave by the same door
+    // as the model that last referenced them.
+    for (std::shared_ptr<Processor>& unused : processors_.sweep()) retire(std::move(unused));
 }
 
 void Engine::audition(core::SampleSource audio) {
@@ -93,15 +101,19 @@ void Engine::start_voice(const RenderModel& model, const Trigger& trigger) {
     // load, never unsafe.
 }
 
-void Engine::render_voices(const RenderModel& model, float* const* output,
-                           int output_channels, int frames) {
+// Sums the voices of one Instrument into the bus and runs its chain over it.
+void Engine::render_instrument(const RenderModel& model, std::uint32_t index, int frames) {
+    const BakedInstrument& instrument = model.instruments[index];
+    const core::AudioData& audio = *instrument.audio;
+    std::int64_t last_frame = instrument.end_frame > 0
+                                  ? std::min(instrument.end_frame, audio.frame_count())
+                                  : audio.frame_count();
+
+    std::fill_n(bus_l_.data(), frames, 0.0f);
+    std::fill_n(bus_r_.data(), frames, 0.0f);
+
     for (Voice& voice : voices_) {
-        if (!voice.active) continue;
-        const BakedInstrument& instrument = model.instruments[voice.instrument];
-        const core::AudioData& audio = *instrument.audio;
-        std::int64_t last_frame = instrument.end_frame > 0
-                                      ? std::min(instrument.end_frame, audio.frame_count())
-                                      : audio.frame_count();
+        if (!voice.active || voice.instrument != index) continue;
 
         for (int i = 0; i < frames; ++i) {
             std::int64_t frame = static_cast<std::int64_t>(voice.src_pos);
@@ -133,11 +145,40 @@ void Engine::render_voices(const RenderModel& model, float* const* output,
                 --voice.gate_remaining;
             }
 
-            output[0][i] += left * voice.gain_l * voice.envelope;
-            if (output_channels > 1) output[1][i] += right * voice.gain_r * voice.envelope;
+            bus_l_[static_cast<std::size_t>(i)] += left * voice.gain_l * voice.envelope;
+            bus_r_[static_cast<std::size_t>(i)] += right * voice.gain_r * voice.envelope;
             voice.src_pos += voice.rate;
         }
     }
+
+    float* bus[2] = {bus_l_.data(), bus_r_.data()};
+    apply_chain(instrument.chain, bus, frames);
+    for (int i = 0; i < frames; ++i) {
+        mix_l_[static_cast<std::size_t>(i)] += bus_l_[static_cast<std::size_t>(i)];
+        mix_r_[static_cast<std::size_t>(i)] += bus_r_[static_cast<std::size_t>(i)];
+    }
+}
+
+void Engine::apply_chain(const std::vector<BakedEffect>& chain, float* const* bus, int frames) {
+    AudioBuffer buffer{bus, 2, frames};
+    EventList no_events;
+    for (const BakedEffect& effect : chain) {
+        // A bypassed Effect is skipped, not fed: its tail freezes, which is
+        // what a bypass switch on hardware does too.
+        if (effect.enabled) effect.processor->process(buffer, no_events);
+    }
+}
+
+// The model carries the parameter values its Effects should run with; they
+// are applied here, on the audio thread, when a model is first taken up.
+// setParameter is realtime-safe by the seam's contract.
+void Engine::take_up_parameters(const RenderModel& model) {
+    auto apply = [](const std::vector<BakedEffect>& chain) {
+        for (const BakedEffect& effect : chain)
+            for (const auto& [id, value] : effect.values) effect.processor->setParameter(id, value);
+    };
+    apply(model.master_chain);
+    for (const BakedInstrument& instrument : model.instruments) apply(instrument.chain);
 }
 
 void Engine::render_audition(float* const* output, int output_channels, int frames) {
@@ -179,6 +220,18 @@ void Engine::render(float* const* output, int output_channels, int frames) {
     for (int c = 0; c < output_channels; ++c)
         std::fill_n(output[c], frames, 0.0f);
 
+    // Processors are prepared for kMaxBlockFrames; a longer callback is
+    // rendered in slices, which is bounded by the callback's own size.
+    for (int offset = 0; offset < frames; offset += kMaxBlockFrames) {
+        float* slice[2] = {output[0] + offset, output_channels > 1 ? output[1] + offset : nullptr};
+        render_block(slice, std::min(output_channels, 2),
+                     std::min(kMaxBlockFrames, frames - offset));
+    }
+
+    audio_epoch_.fetch_add(1, std::memory_order_acq_rel);
+}
+
+void Engine::render_block(float* const* output, int output_channels, int frames) {
     const RenderModel* model = current_.load(std::memory_order_acquire);
 
     // A model swap invalidates the trigger cursor; recover it by search.
@@ -191,6 +244,7 @@ void Engine::render(float* const* output, int output_channels, int frames) {
                                      return t.sample_pos < pos;
                                  }) -
                 model->triggers.begin());
+            take_up_parameters(*model);
         }
         // Voices from the old model hold indices into it; silence them.
         for (Voice& voice : voices_) voice.active = false;
@@ -220,14 +274,31 @@ void Engine::render(float* const* output, int output_channels, int frames) {
             start_voice(*model, model->triggers[next_trigger_]);
             ++next_trigger_;
         }
-        render_voices(*model, output, output_channels, frames);
         position_ = block_end;
         playhead_samples_.store(position_, std::memory_order_release);
     }
 
-    render_audition(output, output_channels, frames);
+    // Instruments keep rendering while stopped so reverb and delay tails
+    // ring out instead of cutting; with no voices and no chain the pass is
+    // a cheap clear.
+    if (model) {
+        std::fill_n(mix_l_.data(), frames, 0.0f);
+        std::fill_n(mix_r_.data(), frames, 0.0f);
+        for (std::uint32_t i = 0; i < model->instruments.size(); ++i) {
+            bool in_use = !model->instruments[i].chain.empty();
+            for (const Voice& voice : voices_)
+                in_use = in_use || (voice.active && voice.instrument == i);
+            if (in_use) render_instrument(*model, i, frames);
+        }
+        float* mix[2] = {mix_l_.data(), mix_r_.data()};
+        apply_chain(model->master_chain, mix, frames);
+        std::copy_n(mix_l_.data(), frames, output[0]);
+        if (output_channels > 1) std::copy_n(mix_r_.data(), frames, output[1]);
+    }
 
-    audio_epoch_.fetch_add(1, std::memory_order_acq_rel);
+    // The audition is a preview of the Sample itself, so it does not pass
+    // through the master chain.
+    render_audition(output, output_channels, frames);
 }
 
 }  // namespace engine
