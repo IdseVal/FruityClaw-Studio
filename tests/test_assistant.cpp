@@ -474,3 +474,50 @@ TEST_CASE("a Function with two ambiguous Selectors is settled by two answers, no
     REQUIRE(pat->parts.size() == 1);
     CHECK(pat->parts[0].instrument == instrument);
 }
+
+TEST_CASE("an answer given for one Function is not reused for the next Function's Selector") {
+    auto f = make_fixture();
+    f.project.patterns.items.push_back(f.project.patterns.items[0]);
+    f.project.patterns.items.back().id = core::new_id();
+    f.project.patterns.items.back().name = "Drums B";
+    core::ProjectHistory history(f.project);
+
+    ScriptedTransport transport;
+    transport.reply.text = "Placed both.";
+    // Two Functions, each with an ambiguous `pattern`: the user must be asked
+    // twice, once per Function, and the first answer must not silently
+    // resolve the second.
+    transport.reply.tool_uses = {
+        {"add_placement", {{"track", named("Track 1")}, {"pattern", named("Drums")}, {"bar", 1ll}}},
+        {"add_placement", {{"track", named("Track 1")}, {"pattern", named("Drums")}, {"bar", 5ll}}},
+    };
+    AssistantSession session(registry(), transport);
+    Id drums_a = f.project.patterns.items[0].id;
+    Id drums_b = f.project.patterns.items.back().id;
+
+    TurnOutcome first = session.run_turn("place drums at bars 1 and 5", history.read(),
+                                         Toggles{}, Focus{});
+    REQUIRE(first.pending);
+    CHECK(first.pending->argument == "pattern");
+    CHECK(first.pending->remaining.size() == 2);
+    CHECK(first.pending->answered.empty());
+
+    TurnOutcome second = session.resume(*first.pending, drums_a, history.read());
+    REQUIRE(second.pending);
+    CHECK(second.pending->argument == "pattern");
+    CHECK(second.pending->remaining.size() == 1);
+    CHECK(second.pending->answered.empty());  // Function 0's answer stayed with Function 0
+    // Function 0 completed and its Delta travels with the stall, as the panel applies it.
+    REQUIRE(second.deltas.size() == 1);
+    apply_all(history, second);
+
+    TurnOutcome done = session.resume(*second.pending, drums_b, history.read());
+    CHECK_FALSE(done.pending);
+    REQUIRE(done.deltas.size() == 1);
+    CHECK(transport.requests == 1);
+    apply_all(history, done);
+    const core::Track& track = history.read().arrangements.items[0].tracks[0];
+    REQUIRE(track.placements.size() == 2);
+    CHECK(track.placements[0].pattern == drums_a);
+    CHECK(track.placements[1].pattern == drums_b);
+}
