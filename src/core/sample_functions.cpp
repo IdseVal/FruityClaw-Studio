@@ -187,4 +187,21 @@ Expected<CreatedDelta> add_part(const Project& project, Id pattern, Id instrumen
     return Expected<CreatedDelta>::success({std::move(delta), id});
 }
 
+Expected<Delta> remove_part(const Project& project, Id pattern, Id part, Origin origin) {
+    const Pattern* pat = project.patterns.find(pattern);
+    if (!pat) return Expected<Delta>::failure("No such Pattern");
+    const Part* lane = nullptr;
+    for (const Part& candidate : pat->parts)
+        if (candidate.id == part) lane = &candidate;
+    if (!lane) return Expected<Delta>::failure("That Instrument is not in '" + pat->name + "'");
+    const Instrument* inst = project.instruments.find(lane->instrument);
+
+    Delta delta;
+    delta.label = "Remove '" + (inst ? inst->name : std::string("lane")) + "' from '" +
+                  pat->name + "'";
+    delta.origin = origin;
+    delta.ops.push_back(remove_part_op(pattern, part, entity_bytes(*lane)));
+    return Expected<Delta>::success(std::move(delta));
+}
+
 }  // namespace core::functions

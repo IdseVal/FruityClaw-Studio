@@ -38,4 +38,9 @@ Expected<CreatedDelta> create_instrument(const Project& project, std::string nam
 Expected<CreatedDelta> add_part(const Project& project, Id pattern, Id instrument,
                                 Origin origin = Origin::User);
 
+// Removes one Part — a lane and its Events — from one Pattern. Does not
+// delete the Instrument; undo restores the lane with its Events in place.
+Expected<Delta> remove_part(const Project& project, Id pattern, Id part,
+                            Origin origin = Origin::User);
+
 }  // namespace core::functions
