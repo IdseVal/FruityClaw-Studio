@@ -19,6 +19,14 @@
 
 namespace core::functions {
 
+// Adds one Sample over ready-made audio to the Project's Sample library.
+// Provenance is Human: this is the door a recorded take comes through
+// (core document 6.3 applies to AI content only). Assigns it to no
+// Instrument and writes nothing into any Pattern. Fails on empty audio, so
+// the Project never holds a Sample it cannot play.
+Expected<CreatedDelta> add_sample(const Project& project, std::string name, SampleSource source,
+                                  Origin origin = Origin::User);
+
 // Adds one Sampler Instrument playing one Sample already in the Project.
 // Writes nothing into any Pattern.
 Expected<CreatedDelta> create_instrument(const Project& project, std::string name, Id sample,

@@ -12,7 +12,9 @@
 
 #include "ui/arrangement_view.h"
 #include "ui/pattern_palette.h"
+#include "ui/record_bar.h"
 #include "ui/sample_browser.h"
+#include "ui/settings_dialog.h"
 #include "ui/theme.h"
 
 namespace ui {
@@ -30,9 +32,10 @@ QLabel* section_header(const QString& text, QWidget* parent) {
 }  // namespace
 
 MainWindow::MainWindow(core::ProjectHistory& history, core::TransportPort& transport,
-                       core::AuditionPort& audition, const QString& product_name,
+                       core::AuditionPort& audition, core::RecorderPort& recorder,
+                       assistant::FunctionToggles& toggles, const QString& product_name,
                        QWidget* parent)
-    : QMainWindow(parent), history_(history), transport_(transport) {
+    : QMainWindow(parent), history_(history), transport_(transport), toggles_(toggles) {
     setWindowTitle(product_name);
     resize(1200, 640);
     setStyleSheet(QString("QMainWindow, QToolBar, QStatusBar { background: %1; "
@@ -80,6 +83,11 @@ MainWindow::MainWindow(core::ProjectHistory& history, core::TransportPort& trans
         QString("color: %1; font-size: 12px;").arg(theme::kTextSecondary.name()));
     bar->addWidget(tempo_label_);
 
+    record_bar_ = new RecordBar(history_, recorder, bar);
+    bar->addWidget(record_bar_);
+    connect(record_bar_, &RecordBar::hint_changed, this,
+            [this](const QString& hint) { statusBar()->showMessage(hint); });
+
     auto* spacer = new QWidget(bar);
     spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     bar->addWidget(spacer);
@@ -99,6 +107,14 @@ MainWindow::MainWindow(core::ProjectHistory& history, core::TransportPort& trans
     auto* redo_button = new QToolButton(bar);
     redo_button->setDefaultAction(redo_action_);
     bar->addWidget(redo_button);
+
+    auto* settings_action = new QAction("Settings", this);
+    settings_action->setShortcut(QKeySequence::Preferences);
+    connect(settings_action, &QAction::triggered, this, [this] { open_settings(); });
+    addAction(settings_action);
+    auto* settings_button = new QToolButton(bar);
+    settings_button->setDefaultAction(settings_action);
+    bar->addWidget(settings_button);
 
     // --- centre: sidebar (Samples over Patterns) | arrangement ---------------
     auto* splitter = new QSplitter(this);
@@ -152,6 +168,12 @@ MainWindow::MainWindow(core::ProjectHistory& history, core::TransportPort& trans
     history_.observe([this] { refresh_undo_redo(); });
     refresh_undo_redo();
     refresh_transport();
+}
+
+void MainWindow::open_settings() {
+    SettingsDialog dialog(toggles_, capabilities_, this);
+    connect(&dialog, &SettingsDialog::toggles_changed, this, &MainWindow::toggles_changed);
+    dialog.exec();
 }
 
 void MainWindow::refresh_transport() {

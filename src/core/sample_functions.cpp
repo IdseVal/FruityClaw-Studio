@@ -11,6 +11,11 @@ Pattern& pattern_or_throw(Project& p, Id pattern) {
     throw OpError("Pattern not found: " + to_string(pattern));
 }
 
+std::size_t entity_bytes(const Sample& s) {
+    // The audio is shared, not copied, so the History retains only the handle.
+    return sizeof(Sample) + s.name.size();
+}
+
 std::size_t entity_bytes(const Instrument& i) {
     return sizeof(Instrument) + i.name.size() + i.chain.size() * sizeof(Effect);
 }
@@ -21,6 +26,38 @@ std::size_t entity_bytes(const Part& part) {
 
 // Insert/Remove pairs as in arrangement_functions.cpp: a Remove bakes the
 // observed index into the Insert it returns so undo restores order exactly.
+
+Op insert_sample_op(Sample sample, std::size_t index);
+
+Op remove_sample_op(Id sample, std::size_t bytes) {
+    Op op;
+    op.bytes = bytes;
+    op.run = [sample](Project& p) -> std::optional<Op> {
+        auto& items = p.samples.items;
+        for (auto it = items.begin(); it != items.end(); ++it) {
+            if (it->id == sample) {
+                std::size_t index = static_cast<std::size_t>(it - items.begin());
+                Sample removed = std::move(*it);
+                items.erase(it);
+                return insert_sample_op(std::move(removed), index);
+            }
+        }
+        throw OpError("Sample not found: " + to_string(sample));
+    };
+    return op;
+}
+
+Op insert_sample_op(Sample sample, std::size_t index) {
+    Op op;
+    op.bytes = entity_bytes(sample);
+    op.run = [sample = std::move(sample), index](Project& p) -> std::optional<Op> {
+        auto& items = p.samples.items;
+        std::size_t at = std::min(index, items.size());
+        items.insert(items.begin() + static_cast<std::ptrdiff_t>(at), sample);
+        return remove_sample_op(sample.id, entity_bytes(sample));
+    };
+    return op;
+}
 
 Op insert_instrument_op(Instrument instrument, std::size_t index);
 
@@ -87,6 +124,25 @@ Op insert_part_op(Id pattern, Part part, std::size_t index) {
 }
 
 }  // namespace
+
+Expected<CreatedDelta> add_sample(const Project& project, std::string name, SampleSource source,
+                                  Origin origin) {
+    if (!source || source->frame_count() == 0)
+        return Expected<CreatedDelta>::failure("Nothing was recorded");
+
+    Sample sample;
+    sample.id = new_id();
+    sample.name = std::move(name);
+    sample.source = std::move(source);
+    sample.provenance = Provenance::human();
+
+    Delta delta;
+    delta.label = "Add Sample '" + sample.name + "'";
+    delta.origin = origin;
+    Id id = sample.id;
+    delta.ops.push_back(insert_sample_op(std::move(sample), project.samples.items.size()));
+    return Expected<CreatedDelta>::success({std::move(delta), id});
+}
 
 Expected<CreatedDelta> create_instrument(const Project& project, std::string name, Id sample,
                                          SamplerMode mode, Origin origin) {

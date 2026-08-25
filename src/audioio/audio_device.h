@@ -24,14 +24,17 @@ struct DeviceInfo {
     int max_input_channels = 0;
     int max_output_channels = 0;
     std::vector<double> supported_sample_rates;
-    // One field beyond the frozen seam spec, so a first open with no saved
-    // configuration can pick a device. Every backend can answer it. Flagged
-    // in the PR for the seam owner to ratify.
+    // Two fields beyond the frozen seam spec, so a first open with no saved
+    // configuration can pick a device. Every backend can answer them. Flagged
+    // in the PRs (#30, #14) for the seam owner to ratify.
     bool is_default_output = false;
+    bool is_default_input = false;
 };
 
 struct StreamConfig {
-    DeviceId input_device;   // may be none — output-only is valid
+    // May be none — output-only is valid. When set, the stream is full
+    // duplex and the callback receives up to two input channels.
+    DeviceId input_device;
     DeviceId output_device;
     double sample_rate = 48000.0;
     int buffer_frames = 512;

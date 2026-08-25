@@ -1,9 +1,14 @@
 // Interaction tests for the Qt layer, from the confirmed FMEA table
 // (tests/FMEA-arrangement-view.md, PR #30 interview): ArrangementView
 // geometry and hit-testing, drag commit atomicity, rename-editor failure
-// routing, MainWindow's undo/redo and transport bindings, and the Sample
+// routing, MainWindow's undo/redo and transport bindings, the Sample
 // sidebar (issue #12): audition, provenance mark, placing into a Pattern,
-// and the Pattern provenance marks (issue #19) on the palette and on Placements.
+// the Pattern provenance marks (issue #19) on the palette and on Placements,
+// the recording controls (issue #14): input choice, record/stop, the
+// take landing in the Project as a Human Sample, and the Function
+// switchboard (issue #17): one labelled row per registry entry, removal
+// from the file, the Assistant-only rule, the local-only banner derived
+// from the built file.
 //
 // Runs on the offscreen platform; simulated input only. The tests replicate
 // the view's layout constants (header 160 px, ruler 28 px, track 56 px,
@@ -14,6 +19,7 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QComboBox>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
@@ -23,15 +29,27 @@
 #include <QToolButton>
 #include <QtTest/QtTest>
 
+#include <QCheckBox>
+#include <QDir>
+#include <QFrame>
+#include <QStandardPaths>
+#include <QTabWidget>
+
+#include "app/toggle_file.h"
+
+#include "assistant/registry.h"
 #include "core/arrangement_functions.h"
 #include "core/history.h"
 #include "core/playback.h"
 #include "test_support.h"
 #include "ui/arrangement_view.h"
+#include "ui/function_switchboard.h"
 #include "ui/main_window.h"
 #include "ui/pattern_palette.h"
 #include "ui/provenance.h"
+#include "ui/record_bar.h"
 #include "ui/sample_browser.h"
+#include "ui/settings_dialog.h"
 
 using namespace core;
 using namespace core::functions;
@@ -66,6 +84,75 @@ struct StubTransport : TransportPort {
 struct StubAudition : AuditionPort {
     std::vector<SampleSource> played;
     void audition(SampleSource audio) override { played.push_back(std::move(audio)); }
+};
+
+// A recorder port with two inputs, one of which refuses to open, that hands
+// back a fixed take when a recording stops.
+struct StubRecorder : RecorderPort {
+    int selected = -1;
+    bool recording = false;
+    SampleSource take = test_support::make_tone(0.3, 330.0);
+    std::vector<int> selections;
+
+    std::vector<InputInfo> inputs() override {
+        return {{7, "Mic", "Stub", 1}, {9, "Broken", "Stub", 2}};
+    }
+    int selected_input() const override { return selected; }
+    std::string select_input(int id) override {
+        selections.push_back(id);
+        if (id == 9) return "Could not open that input: busy";
+        selected = id;
+        return {};
+    }
+    bool start_recording() override {
+        if (selected < 0 || recording) return false;
+        recording = true;
+        return true;
+    }
+    SampleSource stop_recording() override {
+        if (!recording) return nullptr;
+        recording = false;
+        return take;
+    }
+    RecorderStatus status() override {
+        RecorderStatus s;
+        s.recording = recording;
+        s.input_open = selected >= 0;
+        s.frames = recording ? 4800 : 0;
+        s.sample_rate = 48000.0;
+        s.peak = 0.5f;
+        return s;
+    }
+};
+
+struct RecordFixture {
+    test_support::Fixture ids = make_fixture();
+    ProjectHistory history;
+    StubRecorder recorder;
+    ui::RecordBar bar;
+    QComboBox* inputs = nullptr;
+    QToolButton* record = nullptr;
+    QSignalSpy hints;
+
+    RecordFixture()
+        : history(std::move(ids.project)), bar(history, recorder),
+          hints(&bar, &ui::RecordBar::hint_changed) {
+        bar.show();
+        (void)QTest::qWaitForWindowExposed(&bar);
+        inputs = bar.findChild<QComboBox*>();
+        record = bar.findChild<QToolButton*>();
+        REQUIRE(inputs);
+        REQUIRE(record);
+    }
+
+    // The combo's own activation path: what a mouse pick sends.
+    void pick(int index) {
+        inputs->setCurrentIndex(index);
+        emit inputs->activated(index);
+    }
+    QString last_hint() const {
+        return hints.isEmpty() ? QString() : hints.last().at(0).toString();
+    }
 };
 
 // The sidebar over the fixture plus one AI-generated Sample (section 6.3).
@@ -326,7 +413,9 @@ TEST_CASE("MainWindow's undo and redo actions follow HistoryState") {
     ProjectHistory history(std::move(ids.project));
     StubTransport transport;
     StubAudition audition;
-    ui::MainWindow window(history, transport, audition, "Test");
+    StubRecorder recorder;
+    assistant::FunctionToggles toggles;
+    ui::MainWindow window(history, transport, audition, recorder, toggles, "Test");
     window.show();
     (void)QTest::qWaitForWindowExposed(&window);
 
@@ -364,7 +453,9 @@ TEST_CASE("MainWindow's transport poll reflects the port's status") {
     ProjectHistory history(std::move(ids.project));
     StubTransport transport;
     StubAudition audition;
-    ui::MainWindow window(history, transport, audition, "Test");
+    StubRecorder recorder;
+    assistant::FunctionToggles toggles;
+    ui::MainWindow window(history, transport, audition, recorder, toggles, "Test");
     window.show();
     (void)QTest::qWaitForWindowExposed(&window);
 
@@ -656,8 +747,337 @@ TEST_CASE("a Sample without audio lists, opens, and is handed to the port as abs
     CHECK(provenance->text() == "Made by hand");
 }
 
+// ---------------------------------------------------------------------------
+// The Function switchboard (issue #17)
+
+namespace {
+
+struct SwitchboardFixture {
+    assistant::FunctionToggles toggles;
+    ui::FunctionSwitchboard board;
+    QSignalSpy changed;
+
+    explicit SwitchboardFixture(assistant::Capabilities capabilities = {})
+        : board(toggles, capabilities), changed(&board, &ui::FunctionSwitchboard::changed) {
+        board.resize(720, 600);
+        board.show();
+        (void)QTest::qWaitForWindowExposed(&board);
+    }
+
+    QCheckBox* row(const char* name) {
+        QCheckBox* box = board.findChild<QCheckBox*>(name);
+        REQUIRE(box);
+        return box;
+    }
+
+    QString banner_title() {
+        QFrame* banner = board.findChild<QFrame*>("local_only_banner");
+        REQUIRE(banner);
+        return banner->accessibleName();
+    }
+
+    bool offers(std::string_view name) const {
+        const auto& entries = board.file().entries;
+        return std::any_of(entries.begin(), entries.end(),
+                           [name](auto* d) { return d->name == name; });
+    }
+};
+
+int labels_reading(QWidget& root, const QString& text) {
+    int count = 0;
+    for (QLabel* label : root.findChildren<QLabel*>())
+        if (label->text() == text) ++count;
+    return count;
+}
+
+}  // namespace
+
+TEST_CASE("the switchboard shows one row per registry entry, each labelled by class") {
+    SwitchboardFixture f;
+    auto switches = f.board.findChildren<QCheckBox*>();
+    REQUIRE(switches.size() == 43);
+    for (const assistant::FunctionDescriptor& d : assistant::registry()) {
+        QCheckBox* box = f.row(d.name.data());
+        CHECK(box->isChecked());
+        CHECK(box->accessibleName() == QString::fromUtf8(d.effect.data(), d.effect.size()));
+    }
+    CHECK(labels_reading(f.board, "Directive") == 40);
+    CHECK(labels_reading(f.board, "Rework") == 3);
+    // O-17.2: the provider is stated per row; exactly one row reaches the
+    // generation model.
+    CHECK(labels_reading(f.board, "Assistant provider") == 42);
+    CHECK(labels_reading(f.board, "Generation model") == 1);
+}
+
+TEST_CASE("switching a Function off removes it from the file; the user keeps the feature") {
+    SwitchboardFixture f;
+    REQUIRE(f.offers("rename_track"));
+
+    f.row("rename_track")->click();
+    CHECK(f.changed.count() == 1);
+    CHECK(f.toggles.state("rename_track") == false);
+    CHECK_FALSE(f.offers("rename_track"));
+    CHECK(f.board.file().entries.size() == 40);  // 41 offered on a fresh install
+
+    // The toggle is Assistant-only (core document 3.10): the user's own
+    // rename goes through the same door as before, unaffected.
+    auto ids = make_fixture();
+    ProjectHistory history(std::move(ids.project));
+    auto renamed = rename_track(history.read(), ids.arrangement, ids.track_a, "Bass");
+    REQUIRE(renamed.ok());
+    CHECK(history.apply(*renamed) == ApplyResult::Applied);
+    CHECK(history.read().arrangements.items.front().tracks[0].name == "Bass");
+
+    f.row("rename_track")->click();
+    CHECK(f.offers("rename_track"));
+    CHECK(f.changed.count() == 2);
+}
+
+TEST_CASE("the local-only banner lights when the built file has no Rework Function") {
+    SwitchboardFixture f;
+    CHECK(f.banner_title().contains("3 Rework Functions are on"));
+
+    // One click changes one row: the other Rework rows stay on and are now
+    // recorded on, so the section 4.3 default cannot flip them.
+    f.row("rework_pattern")->click();
+    CHECK(f.banner_title().contains("2 Rework Functions are on"));
+    CHECK(f.row("continue_pattern")->isChecked());
+    CHECK(f.toggles.state("continue_pattern") == true);
+    CHECK(f.toggles.state("describe_pattern") == true);
+    CHECK(f.toggles.to_text() ==
+          "continue_pattern=on\ndescribe_pattern=on\nrework_pattern=off\n");
+
+    f.row("continue_pattern")->click();
+    CHECK(f.banner_title().contains("1 Rework Function is on"));
+    CHECK_FALSE(f.board.file().local_only());
+
+    f.row("describe_pattern")->click();
+    CHECK(f.board.file().rework_count == 0);
+    CHECK(f.banner_title().startsWith("Local only"));
+    for (auto* d : f.board.file().entries) CHECK(d->function_class == assistant::FunctionClass::Directive);
+
+    // Re-enabling one Rework Function takes the guarantee away again.
+    f.row("continue_pattern")->click();
+    CHECK_FALSE(f.banner_title().startsWith("Local only"));
+    CHECK(f.board.file().rework_count == 1);
+}
+
+TEST_CASE("a store that closed the privacy floor shows unset Rework rows off (section 4.3)") {
+    assistant::FunctionToggles toggles =
+        assistant::FunctionToggles::from_text("rework_pattern=off\n");
+    ui::FunctionSwitchboard board(toggles, {});
+    board.show();
+    (void)QTest::qWaitForWindowExposed(&board);
+    CHECK_FALSE(board.findChild<QCheckBox*>("rework_pattern")->isChecked());
+    CHECK_FALSE(board.findChild<QCheckBox*>("continue_pattern")->isChecked());
+    CHECK_FALSE(board.findChild<QCheckBox*>("describe_pattern")->isChecked());
+    CHECK(board.findChild<QCheckBox*>("set_tempo")->isChecked());
+    CHECK(board.file().local_only());
+}
+
+TEST_CASE("gated generation rows say so and stay out of the file until enabled") {
+    SwitchboardFixture off;
+    CHECK(off.row("generate_sample")->isChecked());  // the user's choice is on
+    CHECK_FALSE(off.offers("generate_sample"));      // the capability filter drops it
+    CHECK(labels_reading(off.board, "Not offered until you enable music generation.") == 2);
+
+    SwitchboardFixture on{assistant::Capabilities{true}};
+    CHECK(on.offers("generate_sample"));
+    CHECK(labels_reading(on.board, "Not offered until you enable music generation.") == 0);
+}
+
+TEST_CASE("the settings dialog hosts the switchboard in a tab and relays its changes") {
+    assistant::FunctionToggles toggles;
+    ui::SettingsDialog dialog(toggles, {});
+    QSignalSpy relayed(&dialog, &ui::SettingsDialog::toggles_changed);
+    dialog.show();
+    (void)QTest::qWaitForWindowExposed(&dialog);
+
+    QTabWidget* tabs = dialog.findChild<QTabWidget*>();
+    REQUIRE(tabs);
+    CHECK(tabs->tabText(0) == "Assistant Functions");
+
+    dialog.findChild<QCheckBox*>("set_tempo")->click();
+    CHECK(relayed.count() == 1);
+    CHECK(toggles.state("set_tempo") == false);
+}
+
+TEST_CASE("MainWindow offers a Settings action with the platform preferences shortcut") {
+    auto ids = make_fixture();
+    ProjectHistory history(std::move(ids.project));
+    StubTransport transport;
+    StubAudition audition;
+    StubRecorder recorder;
+    assistant::FunctionToggles toggles;
+    ui::MainWindow window(history, transport, audition, recorder, toggles, "Test");
+
+    QAction* settings = nullptr;
+    for (QAction* action : window.actions())
+        if (action->text() == "Settings") settings = action;
+    REQUIRE(settings);
+    CHECK(settings->shortcut() == QKeySequence(QKeySequence::Preferences));
+}
+
+TEST_CASE("re-enabling one Rework row from a closed privacy floor changes only that row") {
+    // The store closed the floor with one explicit off; the other two Rework
+    // rows show off by the section 4.3 default. Clicking one of them on
+    // must not re-open the third through the same default.
+    assistant::FunctionToggles toggles =
+        assistant::FunctionToggles::from_text("rework_pattern=off\n");
+    ui::FunctionSwitchboard board(toggles, {});
+    QSignalSpy changed(&board, &ui::FunctionSwitchboard::changed);
+    board.show();
+    (void)QTest::qWaitForWindowExposed(&board);
+    REQUIRE(board.file().local_only());
+
+    board.findChild<QCheckBox*>("continue_pattern")->click();
+    CHECK(changed.count() == 1);
+    CHECK(board.file().rework_count == 1);
+    CHECK(board.findChild<QCheckBox*>("continue_pattern")->isChecked());
+    CHECK_FALSE(board.findChild<QCheckBox*>("describe_pattern")->isChecked());
+    CHECK_FALSE(board.findChild<QCheckBox*>("rework_pattern")->isChecked());
+    // What was shown is now recorded, so a later build reads the same file.
+    CHECK(toggles.to_text() ==
+          "continue_pattern=on\ndescribe_pattern=off\nrework_pattern=off\n");
+    CHECK(assistant::build(assistant::registry(), toggles, {}).rework_count == 1);
+}
+
+// ---------------------------------------------------------------------------
+// The toggle file (src/app/toggle_file.cpp): persistence between sessions
+
+namespace {
+
+// Points QStandardPaths at a scratch tree and starts from no file at all.
+struct ToggleFileFixture {
+    ToggleFileFixture() {
+        QStandardPaths::setTestModeEnabled(true);
+        QCoreApplication::setApplicationName("fcs_toggle_file_test");
+        QDir(QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation))
+            .removeRecursively();
+    }
+    ~ToggleFileFixture() {
+        QDir(QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation))
+            .removeRecursively();
+        QStandardPaths::setTestModeEnabled(false);
+    }
+};
+
+}  // namespace
+
+TEST_CASE("the toggle file is an empty store until something is saved") {
+    ToggleFileFixture fx;
+    assistant::FunctionToggles loaded = app::load_toggles();
+    CHECK_FALSE(loaded.state("rework_pattern").has_value());
+    CHECK(loaded.to_text().empty());
+    CHECK(assistant::build(assistant::registry(), loaded, {}).entries.size() == 41);
+}
+
+TEST_CASE("the toggle file round-trips the store and the last save wins") {
+    ToggleFileFixture fx;
+    assistant::FunctionToggles toggles;
+    toggles.set_enabled("rework_pattern", false);
+    toggles.set_enabled("set_tempo", false);
+    REQUIRE(app::save_toggles(toggles));
+
+    assistant::FunctionToggles first = app::load_toggles();
+    CHECK(first.to_text() == "rework_pattern=off\nset_tempo=off\n");
+    CHECK(first.state("rework_pattern") == false);
+    // Section 4.3 survives the round trip: the floor stays closed.
+    CHECK(assistant::build(assistant::registry(), first, {}).local_only());
+
+    // A second save replaces the file rather than appending to it.
+    toggles.set_enabled("set_tempo", true);
+    toggles.set_enabled("rework_pattern", true);
+    REQUIRE(app::save_toggles(toggles));
+    assistant::FunctionToggles second = app::load_toggles();
+    CHECK(second.to_text() == "rework_pattern=on\nset_tempo=on\n");
+    CHECK_FALSE(assistant::build(assistant::registry(), second, {}).local_only());
+}
+
+TEST_CASE("a hand-edited toggle file loads what parses and drops the rest") {
+    ToggleFileFixture fx;
+    QString dir = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
+    REQUIRE(QDir().mkpath(dir));
+    QFile file(dir + "/assistant_functions.txt");
+    REQUIRE(file.open(QIODevice::WriteOnly));
+    file.write("describe_pattern=off\r\nnot a line\n../x=off\nset_tempo=off\n");
+    file.close();
+
+    assistant::FunctionToggles loaded = app::load_toggles();
+    CHECK(loaded.to_text() == "describe_pattern=off\nset_tempo=off\n");
+}
+
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication app(argc, argv);
     return Catch::Session().run(argc, argv);
+}
+
+TEST_CASE("RecordBar lists the port's inputs and routes the pick to the port") {
+    RecordFixture f;
+    REQUIRE(f.inputs->count() == 3);
+    CHECK(f.inputs->itemText(0) == "No input");
+    CHECK(f.inputs->itemText(1) == "Mic (Stub)");
+    CHECK(f.inputs->itemText(2) == "Broken (Stub)");
+    CHECK_FALSE(f.record->isEnabled());  // nothing to record from yet
+
+    f.pick(1);
+    CHECK(f.recorder.selections == std::vector<int>{7});
+    CHECK(f.inputs->currentIndex() == 1);
+    CHECK(f.record->isEnabled());
+    CHECK(f.last_hint() == "Recording from Mic (Stub). Press R to record.");
+}
+
+TEST_CASE("an input that will not open is reported and the pick reverts") {
+    RecordFixture f;
+    f.pick(2);
+    CHECK(f.recorder.selections == std::vector<int>{9});
+    CHECK(f.inputs->currentIndex() == 0);
+    CHECK_FALSE(f.record->isEnabled());
+    CHECK(f.last_hint() == "Could not open that input: busy");
+}
+
+TEST_CASE("record then stop adds the take as one Human Sample, undoable") {
+    RecordFixture f;
+    Project before = f.history.read();
+    f.pick(1);
+
+    QTest::mouseClick(f.record, Qt::LeftButton);
+    CHECK(f.recorder.recording);
+    CHECK(f.record->text() == "Stop Rec");
+    CHECK(f.history.read().samples.items.size() == before.samples.items.size());
+    QLabel* length = nullptr;
+    for (QLabel* label : f.bar.findChildren<QLabel*>())
+        if (label->text() == "0:00.1") length = label;
+    CHECK(length);
+
+    QTest::mouseClick(f.record, Qt::LeftButton);
+    CHECK_FALSE(f.recorder.recording);
+    CHECK(f.record->text() == "Record");
+    const auto& samples = f.history.read().samples.items;
+    REQUIRE(samples.size() == before.samples.items.size() + 1);
+    CHECK(samples.back().name == "Take 1");
+    CHECK(samples.back().source == f.recorder.take);
+    CHECK(samples.back().provenance.is_human());
+    CHECK(f.history.state().undo_label == "Add Sample 'Take 1'");
+    CHECK(f.last_hint() == "Recorded 'Take 1' (0.3 s).");
+
+    // A second take gets the next free name.
+    QTest::mouseClick(f.record, Qt::LeftButton);
+    QTest::mouseClick(f.record, Qt::LeftButton);
+    CHECK(f.history.read().samples.items.back().name == "Take 2");
+
+    REQUIRE(f.history.undo());
+    REQUIRE(f.history.undo());
+    CHECK(f.history.read() == before);
+}
+
+TEST_CASE("recording with no input chosen is refused with a hint") {
+    RecordFixture f;
+    // The button is disabled, so its shortcut is too; the port must still
+    // refuse if asked directly, and nothing reaches the Project.
+    CHECK_FALSE(f.recorder.start_recording());
+    QTest::keyClick(&f.bar, Qt::Key_R);
+    CHECK_FALSE(f.recorder.recording);
+    CHECK(f.history.read().samples.items.size() == 2);
 }
