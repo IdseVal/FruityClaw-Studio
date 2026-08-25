@@ -9,6 +9,7 @@ FetchContent_MakeAvailable(catch2)
 add_executable(core_tests
   test_history.cpp
   test_arrangement_functions.cpp
+  test_sample_functions.cpp
   test_engine.cpp
   test_engine_stress.cpp
 )
