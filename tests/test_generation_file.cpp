@@ -74,3 +74,31 @@ TEST_CASE("the key round-trips and is not written in the clear") {
     CHECK_FALSE(store.has_key());
     CHECK_FALSE(store.key().has_value());
 }
+
+TEST_CASE("a damaged settings file reads as the fresh-install settings, not a crash") {
+    TempDir dir;
+    std::filesystem::create_directories(dir.path);
+    std::ofstream(dir.path / "generation.settings", std::ios::binary)
+        << "\x00\xff garbage without a separator\nenabled\n=lonely\n";
+    app::GenerationFile store(dir.path);
+    CHECK(store.read() == GenerationSettings{});
+}
+
+TEST_CASE("enabled with no model chosen reads as off") {
+    TempDir dir;
+    std::filesystem::create_directories(dir.path);
+    std::ofstream(dir.path / "generation.settings") << "enabled=1\nmodel=\n";
+    CHECK_FALSE(app::GenerationFile(dir.path).read().enabled);
+}
+
+TEST_CASE("a key file that cannot be unsealed yields no key and no crash") {
+    TempDir dir;
+    std::filesystem::create_directories(dir.path);
+    std::ofstream(dir.path / "generation.key", std::ios::binary) << "not a sealed blob";
+    app::GenerationFile store(dir.path);
+#ifdef _WIN32
+    CHECK_FALSE(store.key().has_value());
+#endif
+    store.clear_key();
+    CHECK_FALSE(store.has_key());
+}
