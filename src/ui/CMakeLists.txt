@@ -8,6 +8,7 @@ add_library(ui STATIC
   arrangement_view.cpp
   pattern_palette.cpp
   sample_browser.cpp
+  record_bar.cpp
   function_switchboard.cpp
   settings_dialog.cpp
   main_window.cpp

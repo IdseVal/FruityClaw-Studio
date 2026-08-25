@@ -79,3 +79,39 @@ TEST_CASE("add_part refuses a duplicate lane and missing targets") {
     CHECK(add_part(f.project, new_id(), drum).error == "No such Pattern");
     CHECK(add_part(f.project, f.drum_pattern, new_id()).error == "No such Instrument");
 }
+
+TEST_CASE("add_sample appends one Human Sample over the audio and undo removes it") {
+    auto f = make_fixture();
+    Project original = f.project;
+    ProjectHistory history(std::move(f.project));
+    SampleSource take = test_support::make_tone(0.3, 330.0);
+
+    auto added = add_sample(history.read(), "Take 1", take);
+    REQUIRE(added.ok());
+    REQUIRE(added->delta.ops.size() == 1);
+    REQUIRE(history.apply(std::move(added->delta)) == ApplyResult::Applied);
+
+    const auto& samples = history.read().samples.items;
+    REQUIRE(samples.size() == 3);
+    CHECK(samples.back().id == added->id);
+    CHECK(samples.back().name == "Take 1");
+    CHECK(samples.back().source == take);  // shared, not copied
+    // A recording is the user's own work: never marked AI-generated.
+    CHECK(samples.back().provenance.is_human());
+    // Nothing else moved: no Instrument, no Pattern lane.
+    CHECK(history.read().instruments == original.instruments);
+    CHECK(history.read().patterns == original.patterns);
+    CHECK(history.state().undo_label == "Add Sample 'Take 1'");
+
+    REQUIRE(history.undo());
+    CHECK(history.read() == original);
+    REQUIRE(history.redo());
+    CHECK(history.read().samples.items.size() == 3);
+}
+
+TEST_CASE("add_sample refuses empty audio") {
+    auto f = make_fixture();
+    CHECK(add_sample(f.project, "Empty", nullptr).error == "Nothing was recorded");
+    CHECK(add_sample(f.project, "Empty", std::make_shared<AudioData>()).error ==
+          "Nothing was recorded");
+}

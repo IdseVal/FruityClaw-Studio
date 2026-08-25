@@ -13,6 +13,12 @@ add_executable(core_tests
   test_engine.cpp
   test_engine_stress.cpp
   test_function_file.cpp
+  test_recorder.cpp
+  test_audio_session.cpp
+  # The RecorderPort implementation lives in the composition root. It needs
+  # only the seam header, so it compiles into the tests without the PortAudio
+  # adapter and runs headless.
+  ${CMAKE_SOURCE_DIR}/src/app/audio_session.cpp
 )
 target_link_libraries(core_tests PRIVATE core engine assistant Catch2::Catch2WithMain)
 
