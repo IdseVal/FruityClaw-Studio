@@ -226,6 +226,33 @@ TEST_CASE("a truncated file is rejected and the retained version still loads") {
     CHECK(equivalent(first, *previous.project));
 }
 
+TEST_CASE("saving over a damaged file keeps the last good retained version") {
+    TempDir dir;
+    fs::path file = dir.path / "one.project";
+    Project first = make_full_project();
+    Project second = first;
+    second.title = "Second";
+    Project third = first;
+    third.title = "Third";
+    REQUIRE(save_project(first, file).ok);
+    REQUIRE(save_project(second, file).ok);  // .previous is now `first`
+
+    // The current file is damaged, as an earlier crash might have left it.
+    std::vector<std::byte> bytes = read_bytes(file);
+    bytes[bytes.size() - 10] ^= std::byte{0x01};
+    write_bytes(file, bytes);
+    REQUIRE_FALSE(load_project(file).ok());
+
+    REQUIRE(save_project(third, file).ok);
+
+    LoadResult current = load_project(file);
+    LoadResult previous = load_project(previous_version_path(file));
+    REQUIRE(current.ok());
+    REQUIRE(previous.ok());
+    CHECK(current.project->title == "Third");
+    CHECK(equivalent(first, *previous.project));  // not the damaged `second`
+}
+
 TEST_CASE("a flipped byte in the payload is caught by the checksum") {
     std::vector<std::byte> bytes = encode(make_full_project());
     bytes[bytes.size() - 10] ^= std::byte{0x01};

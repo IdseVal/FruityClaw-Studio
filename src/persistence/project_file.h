@@ -57,8 +57,9 @@ struct LoadResult {
 std::filesystem::path previous_version_path(const std::filesystem::path& file);
 
 // Writes `project` to `file` atomically, retaining any existing `file` at
-// `previous_version_path(file)` first. On any failure the existing file is
-// untouched and the error says why.
+// `previous_version_path(file)` first — but only when that existing file
+// still loads, so a damaged current file never displaces a good retained
+// one. On any failure the existing file is untouched and the error says why.
 SaveResult save_project(const core::Project& project, const std::filesystem::path& file);
 
 // Reads `file`. A truncated, corrupted, foreign or newer-version file is

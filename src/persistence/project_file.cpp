@@ -616,7 +616,10 @@ SaveResult save_project(const Project& project, const std::filesystem::path& fil
 
     // Retain the previous good version before publishing the new one. Copy
     // rather than rename, so the target is a complete file at every instant.
-    if (fs::exists(file, ec)) {
+    // Only a file that still loads is retained: copying a damaged current
+    // file would overwrite the last good previous version with damage, which
+    // is exactly the loss the retained version exists to prevent.
+    if (fs::exists(file, ec) && load_project(file).ok()) {
         if (!fs::copy_file(file, previous_version_path(file), fs::copy_options::overwrite_existing,
                            ec)) {
             result.error = "cannot retain previous version: " + ec.message();
