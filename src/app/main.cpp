@@ -7,6 +7,7 @@
 #include "app/demo_project.h"
 #include "audioio/portaudio_device.h"
 #include "core/history.h"
+#include "effects/stock_effects.h"
 #include "engine/engine.h"
 #include "ui/main_window.h"
 
@@ -52,6 +53,7 @@ int main(int argc, char** argv) {
 
     core::ProjectHistory history(app::make_demo_project());
     engine::Engine player;
+    player.set_processor_factory(effects::make_effect);
 
     std::unique_ptr<audioio::AudioDevice> device = audioio::make_portaudio_device();
     double sample_rate = open_audio(device.get(), player);
