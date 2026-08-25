@@ -31,6 +31,7 @@
 #include <QToolButton>
 #include <QtTest/QtTest>
 #include <algorithm>
+#include <set>
 
 #include <QCheckBox>
 #include <QDir>
@@ -1266,6 +1267,26 @@ TEST_CASE("+ Pattern adds an empty one-bar Pattern and opens it for naming") {
     // Undoing the creation closes it: the grid cannot show a Pattern that is gone.
     REQUIRE(f.history.undo());
     CHECK_FALSE(f.sequencer.pattern().has_value());
+}
+
+TEST_CASE("+ Pattern skips a 'Pattern N' that is already taken") {
+    SequencerFixture f;
+    // Three Patterns exist, so the counter would say "Pattern 4"; take that
+    // name first, as removing a Pattern and adding another would leave it.
+    auto renamed = rename_pattern(f.history.read(), f.generated_pattern, "Pattern 4");
+    REQUIRE(renamed.ok());
+    REQUIRE(f.history.apply(std::move(*renamed)) == ApplyResult::Applied);
+
+    auto* add = f.sequencer.findChild<QToolButton*>();
+    REQUIRE(add);
+    QTest::mouseClick(add, Qt::LeftButton);
+
+    const auto& patterns = f.history.read().patterns.items;
+    REQUIRE(patterns.size() == 4);
+    CHECK(patterns.back().name == "Pattern 5");
+    std::set<std::string> names;
+    for (const Pattern& pat : patterns) names.insert(pat.name);
+    CHECK(names.size() == patterns.size());
 }
 
 TEST_CASE("the name field renames through rename_pattern and refuses an empty name") {
