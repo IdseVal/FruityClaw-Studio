@@ -27,6 +27,15 @@ add_library(effects STATIC
   ${THIRD_PARTY}/peaklim/peaklim.cc
 )
 
+# The vendored sources are upstream's, not ours to fix: their warnings are
+# silenced so the project's own /W4 output stays readable.
+set(VENDORED_SOURCES ${AIRWINDOWS_SOURCES} ${THIRD_PARTY}/peaklim/peaklim.cc)
+if(MSVC)
+  set_source_files_properties(${VENDORED_SOURCES} PROPERTIES COMPILE_OPTIONS /w)
+else()
+  set_source_files_properties(${VENDORED_SOURCES} PROPERTIES COMPILE_OPTIONS -w)
+endif()
+
 target_include_directories(effects
   PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..
   PRIVATE ${THIRD_PARTY} ${THIRD_PARTY}/airwindows/shim)
