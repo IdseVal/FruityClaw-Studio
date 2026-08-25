@@ -13,6 +13,8 @@
 #include <QToolBar>
 #include <QToolButton>
 
+#include <utility>
+
 #include "ui/arrangement_view.h"
 #include "ui/pattern_palette.h"
 #include "ui/theme.h"
@@ -147,7 +149,7 @@ void MainWindow::closeEvent(QCloseEvent* event) {
 void MainWindow::refresh_title() {
     QString file = current_file_.empty()
                        ? "Untitled"
-                       : QString::fromStdString(current_file_.filename().string());
+                       : QString::fromStdU16String(current_file_.filename().u16string());
     QString dirty = history_.state().is_dirty ? "*" : "";
     setWindowTitle(QString("%1%2 - %3").arg(file, dirty, product_name_));
 }
@@ -162,23 +164,27 @@ bool MainWindow::save() {
     // Only an explicit user save moves the saved cursor (history contract 8.3).
     history_.mark_saved();
     refresh_title();
-    statusBar()->showMessage("Saved " + QString::fromStdString(current_file_.string()));
+    statusBar()->showMessage("Saved " + QString::fromStdU16String(current_file_.u16string()));
     return true;
 }
 
 bool MainWindow::save_as() {
     QString chosen = QFileDialog::getSaveFileName(
-        this, "Save Project", QString::fromStdString(current_file_.string()));
+        this, "Save Project", QString::fromStdU16String(current_file_.u16string()));
     if (chosen.isEmpty()) return false;
-    current_file_ = std::filesystem::path(chosen.toStdString());
-    return save();
+    // Paths cross to and from Qt as UTF-16: on MSVC the narrow path
+    // constructor is the ANSI code page, which mangles non-ASCII names.
+    std::filesystem::path previous = std::exchange(current_file_, chosen.toStdU16String());
+    if (save()) return true;
+    current_file_ = previous;  // a failed first save names no file
+    return false;
 }
 
 void MainWindow::open() {
     if (!confirm_discard_changes()) return;
     QString chosen = QFileDialog::getOpenFileName(this, "Open Project");
     if (chosen.isEmpty()) return;
-    std::filesystem::path path(chosen.toStdString());
+    std::filesystem::path path(chosen.toStdU16String());
     std::string error = files_.open(path);
     if (!error.empty()) {
         QMessageBox::critical(this, "Open failed", QString::fromStdString(error));

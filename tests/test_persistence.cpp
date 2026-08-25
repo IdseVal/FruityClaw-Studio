@@ -158,6 +158,33 @@ TEST_CASE("save then load from disk reproduces the Project exactly") {
     CHECK(entries == 1);
 }
 
+TEST_CASE("a non-ASCII path given as UTF-16 saves and loads") {
+    TempDir dir;
+    // Built from UTF-16, the way the UI hands paths over; on MSVC a narrow
+    // UTF-8 string would be read as the ANSI code page and mangled.
+    fs::path file = dir.path / std::u16string(u"mélodie été.project");
+    Project original = make_full_project();
+
+    SaveResult saved = save_project(original, file);
+    REQUIRE(saved.ok);
+    CHECK(fs::exists(file));
+    CHECK(fs::exists(dir.path / fs::path(u8"mélodie été.project")));
+
+    LoadResult loaded = load_project(file);
+    REQUIRE(loaded.ok());
+    CHECK(equivalent(original, *loaded.project));
+
+    REQUIRE(save_project(original, file).ok);
+    CHECK(fs::exists(previous_version_path(file)));
+
+    // The error text for a missing file keeps the name intact, as UTF-8.
+    fs::path absent = dir.path / std::u16string(u"é.project");
+    LoadResult missing = load_project(absent);
+    std::u8string u8 = absent.filename().u8string();
+    std::string expected(u8.begin(), u8.end());
+    CHECK(missing.error.find(expected) != std::string::npos);
+}
+
 TEST_CASE("saving over an existing file retains the previous good version") {
     TempDir dir;
     fs::path file = dir.path / "one.project";

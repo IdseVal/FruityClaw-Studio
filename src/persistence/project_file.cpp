@@ -443,6 +443,13 @@ Project read_project(Reader& r) {
 // ---------------------------------------------------------------------------
 // Disk
 
+// Paths in error messages, as UTF-8. path::string() would be the ANSI code
+// page on MSVC and mangle non-ASCII names.
+std::string display(const std::filesystem::path& path) {
+    std::u8string u8 = path.u8string();
+    return std::string(u8.begin(), u8.end());
+}
+
 struct FileCloser {
     void operator()(std::FILE* f) const {
         if (f) std::fclose(f);
@@ -467,15 +474,15 @@ bool write_fully(const std::filesystem::path& path, std::span<const std::byte> b
                  std::string& error) {
     File f = open_file(path, "wb");
     if (!f) {
-        error = "cannot create " + path.string();
+        error = "cannot create " + display(path);
         return false;
     }
     if (!bytes.empty() && std::fwrite(bytes.data(), 1, bytes.size(), f.get()) != bytes.size()) {
-        error = "short write to " + path.string();
+        error = "short write to " + display(path);
         return false;
     }
     if (std::fflush(f.get()) != 0) {
-        error = "flush failed for " + path.string();
+        error = "flush failed for " + display(path);
         return false;
     }
 #ifdef _WIN32
@@ -483,7 +490,7 @@ bool write_fully(const std::filesystem::path& path, std::span<const std::byte> b
 #else
     if (::fsync(fileno(f.get())) != 0) {
 #endif
-        error = "sync to disk failed for " + path.string();
+        error = "sync to disk failed for " + display(path);
         return false;
     }
     return true;
@@ -493,7 +500,7 @@ bool read_fully(const std::filesystem::path& path, std::vector<std::byte>& bytes
                 std::string& error) {
     File f = open_file(path, "rb");
     if (!f) {
-        error = "cannot open " + path.string();
+        error = "cannot open " + display(path);
         return false;
     }
     std::array<std::byte, 64 * 1024> chunk;
@@ -503,7 +510,7 @@ bool read_fully(const std::filesystem::path& path, std::vector<std::byte>& bytes
         if (n < chunk.size()) break;
     }
     if (std::ferror(f.get())) {
-        error = "read error on " + path.string();
+        error = "read error on " + display(path);
         return false;
     }
     return true;
@@ -629,7 +636,7 @@ SaveResult save_project(const Project& project, const std::filesystem::path& fil
 
     fs::rename(temp, file, ec);
     if (ec) {
-        result.error = "cannot replace " + file.string() + ": " + ec.message();
+        result.error = "cannot replace " + display(file) + ": " + ec.message();
         return result;
     }
 #ifndef _WIN32
