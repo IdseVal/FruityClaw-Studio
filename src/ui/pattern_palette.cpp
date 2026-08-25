@@ -2,13 +2,36 @@
 
 #include <QPainter>
 
+#include "ui/provenance.h"
 #include "ui/theme.h"
 
 namespace ui {
+namespace {
+
+// Wide enough for the provenance mark to sit in a corner of the swatch.
+constexpr int kSwatchWidth = 26;
+constexpr int kSwatchHeight = 14;
+
+QPixmap swatch(const QColor& colour, bool marked) {
+    QPixmap pixmap(kSwatchWidth, kSwatchHeight);
+    pixmap.fill(Qt::transparent);
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setBrush(colour);
+    painter.setPen(Qt::NoPen);
+    painter.drawRoundedRect(0, 0, kSwatchWidth, kSwatchHeight, 3, 3);
+    if (marked) {
+        paint_provenance_mark(painter, QRect(kSwatchWidth - 13, kSwatchHeight - 10, 12, 9));
+    }
+    return pixmap;
+}
+
+}  // namespace
 
 PatternPalette::PatternPalette(core::ProjectHistory& history, QWidget* parent)
     : QListWidget(parent), history_(history) {
     setSelectionMode(QAbstractItemView::NoSelection);
+    setIconSize(QSize(kSwatchWidth, kSwatchHeight));
     setFocusPolicy(Qt::NoFocus);
     setStyleSheet(QString("QListWidget { background: %1; color: %2; border: none;"
                           " padding: 4px; }"
@@ -28,17 +51,13 @@ void PatternPalette::reload() {
         const core::Pattern& pattern = patterns[i];
         QColor colour = pattern.colour ? theme::from_colour(*pattern.colour)
                                        : theme::hue(static_cast<int>(i));
-        QPixmap swatch(12, 12);
-        swatch.fill(Qt::transparent);
-        {
-            QPainter painter(&swatch);
-            painter.setRenderHint(QPainter::Antialiasing, true);
-            painter.setBrush(colour);
-            painter.setPen(Qt::NoPen);
-            painter.drawRoundedRect(0, 0, 12, 12, 3, 3);
-        }
-        auto* item = new QListWidgetItem(QIcon(swatch),
+        bool marked = !pattern.provenance.is_human();
+        auto* item = new QListWidgetItem(QIcon(swatch(colour, marked)),
                                          QString::fromStdString(pattern.name), this);
+        // The mark must reach a screen reader as well as the eye.
+        item->setData(Qt::AccessibleDescriptionRole,
+                      marked ? kProvenanceMarkLabel : QString());
+        item->setToolTip(provenance_text(pattern.provenance));
         if (armed_ && *armed_ == pattern.id) {
             item->setForeground(theme::kAccent);
         }
