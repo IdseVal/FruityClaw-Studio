@@ -2,7 +2,10 @@
 // (tests/FMEA-arrangement-view.md, PR #30 interview): ArrangementView
 // geometry and hit-testing, drag commit atomicity, rename-editor failure
 // routing, MainWindow's undo/redo and transport bindings, and the Sample
-// sidebar (issue #12): audition, provenance mark, placing into a Pattern.
+// sidebar (issue #12): audition, provenance mark, placing into a Pattern;
+// and the Function switchboard (issue #17): one labelled row per registry
+// entry, removal from the file, the Assistant-only rule, the local-only
+// banner derived from the built file.
 //
 // Runs on the offscreen platform; simulated input only. The tests replicate
 // the view's layout constants (header 160 px, ruler 28 px, track 56 px,
@@ -22,13 +25,20 @@
 #include <QToolButton>
 #include <QtTest/QtTest>
 
+#include <QCheckBox>
+#include <QFrame>
+#include <QTabWidget>
+
+#include "assistant/registry.h"
 #include "core/arrangement_functions.h"
 #include "core/history.h"
 #include "core/playback.h"
 #include "test_support.h"
 #include "ui/arrangement_view.h"
+#include "ui/function_switchboard.h"
 #include "ui/main_window.h"
 #include "ui/sample_browser.h"
+#include "ui/settings_dialog.h"
 
 using namespace core;
 using namespace core::functions;
@@ -307,7 +317,8 @@ TEST_CASE("MainWindow's undo and redo actions follow HistoryState") {
     ProjectHistory history(std::move(ids.project));
     StubTransport transport;
     StubAudition audition;
-    ui::MainWindow window(history, transport, audition, "Test");
+    assistant::FunctionToggles toggles;
+    ui::MainWindow window(history, transport, audition, toggles, "Test");
     window.show();
     (void)QTest::qWaitForWindowExposed(&window);
 
@@ -345,7 +356,8 @@ TEST_CASE("MainWindow's transport poll reflects the port's status") {
     ProjectHistory history(std::move(ids.project));
     StubTransport transport;
     StubAudition audition;
-    ui::MainWindow window(history, transport, audition, "Test");
+    assistant::FunctionToggles toggles;
+    ui::MainWindow window(history, transport, audition, toggles, "Test");
     window.show();
     (void)QTest::qWaitForWindowExposed(&window);
 
@@ -556,6 +568,176 @@ TEST_CASE("a Sample without audio lists, opens, and is handed to the port as abs
     QLabel* provenance = browser.findChild<QLabel*>("provenance");
     REQUIRE(provenance);
     CHECK(provenance->text() == "Made by hand");
+}
+
+// ---------------------------------------------------------------------------
+// The Function switchboard (issue #17)
+
+namespace {
+
+struct SwitchboardFixture {
+    assistant::FunctionToggles toggles;
+    ui::FunctionSwitchboard board;
+    QSignalSpy changed;
+
+    explicit SwitchboardFixture(assistant::Capabilities capabilities = {})
+        : board(toggles, capabilities), changed(&board, &ui::FunctionSwitchboard::changed) {
+        board.resize(720, 600);
+        board.show();
+        (void)QTest::qWaitForWindowExposed(&board);
+    }
+
+    QCheckBox* row(const char* name) {
+        QCheckBox* box = board.findChild<QCheckBox*>(name);
+        REQUIRE(box);
+        return box;
+    }
+
+    QString banner_title() {
+        QFrame* banner = board.findChild<QFrame*>("local_only_banner");
+        REQUIRE(banner);
+        return banner->accessibleName();
+    }
+
+    bool offers(std::string_view name) const {
+        const auto& entries = board.file().entries;
+        return std::any_of(entries.begin(), entries.end(),
+                           [name](auto* d) { return d->name == name; });
+    }
+};
+
+int labels_reading(QWidget& root, const QString& text) {
+    int count = 0;
+    for (QLabel* label : root.findChildren<QLabel*>())
+        if (label->text() == text) ++count;
+    return count;
+}
+
+}  // namespace
+
+TEST_CASE("the switchboard shows one row per registry entry, each labelled by class") {
+    SwitchboardFixture f;
+    auto switches = f.board.findChildren<QCheckBox*>();
+    REQUIRE(switches.size() == 43);
+    for (const assistant::FunctionDescriptor& d : assistant::registry()) {
+        QCheckBox* box = f.row(d.name.data());
+        CHECK(box->isChecked());
+        CHECK(box->accessibleName() == QString::fromUtf8(d.effect.data(), d.effect.size()));
+    }
+    CHECK(labels_reading(f.board, "Directive") == 40);
+    CHECK(labels_reading(f.board, "Rework") == 3);
+    // O-17.2: the provider is stated per row; exactly one row reaches the
+    // generation model.
+    CHECK(labels_reading(f.board, "Assistant provider") == 42);
+    CHECK(labels_reading(f.board, "Generation model") == 1);
+}
+
+TEST_CASE("switching a Function off removes it from the file; the user keeps the feature") {
+    SwitchboardFixture f;
+    REQUIRE(f.offers("rename_track"));
+
+    f.row("rename_track")->click();
+    CHECK(f.changed.count() == 1);
+    CHECK(f.toggles.state("rename_track") == false);
+    CHECK_FALSE(f.offers("rename_track"));
+    CHECK(f.board.file().entries.size() == 40);  // 41 offered on a fresh install
+
+    // The toggle is Assistant-only (core document 3.10): the user's own
+    // rename goes through the same door as before, unaffected.
+    auto ids = make_fixture();
+    ProjectHistory history(std::move(ids.project));
+    auto renamed = rename_track(history.read(), ids.arrangement, ids.track_a, "Bass");
+    REQUIRE(renamed.ok());
+    CHECK(history.apply(*renamed) == ApplyResult::Applied);
+    CHECK(history.read().arrangements.items.front().tracks[0].name == "Bass");
+
+    f.row("rename_track")->click();
+    CHECK(f.offers("rename_track"));
+    CHECK(f.changed.count() == 2);
+}
+
+TEST_CASE("the local-only banner lights when the built file has no Rework Function") {
+    SwitchboardFixture f;
+    CHECK(f.banner_title().contains("3 Rework Functions are on"));
+
+    // One click changes one row: the other Rework rows stay on and are now
+    // recorded on, so the section 4.3 default cannot flip them.
+    f.row("rework_pattern")->click();
+    CHECK(f.banner_title().contains("2 Rework Functions are on"));
+    CHECK(f.row("continue_pattern")->isChecked());
+    CHECK(f.toggles.state("continue_pattern") == true);
+    CHECK(f.toggles.state("describe_pattern") == true);
+    CHECK(f.toggles.to_text() ==
+          "continue_pattern=on\ndescribe_pattern=on\nrework_pattern=off\n");
+
+    f.row("continue_pattern")->click();
+    CHECK(f.banner_title().contains("1 Rework Function is on"));
+    CHECK_FALSE(f.board.file().local_only());
+
+    f.row("describe_pattern")->click();
+    CHECK(f.board.file().rework_count == 0);
+    CHECK(f.banner_title().startsWith("Local only"));
+    for (auto* d : f.board.file().entries) CHECK(d->function_class == assistant::FunctionClass::Directive);
+
+    // Re-enabling one Rework Function takes the guarantee away again.
+    f.row("continue_pattern")->click();
+    CHECK_FALSE(f.banner_title().startsWith("Local only"));
+    CHECK(f.board.file().rework_count == 1);
+}
+
+TEST_CASE("a store that closed the privacy floor shows unset Rework rows off (section 4.3)") {
+    assistant::FunctionToggles toggles =
+        assistant::FunctionToggles::from_text("rework_pattern=off\n");
+    ui::FunctionSwitchboard board(toggles, {});
+    board.show();
+    (void)QTest::qWaitForWindowExposed(&board);
+    CHECK_FALSE(board.findChild<QCheckBox*>("rework_pattern")->isChecked());
+    CHECK_FALSE(board.findChild<QCheckBox*>("continue_pattern")->isChecked());
+    CHECK_FALSE(board.findChild<QCheckBox*>("describe_pattern")->isChecked());
+    CHECK(board.findChild<QCheckBox*>("set_tempo")->isChecked());
+    CHECK(board.file().local_only());
+}
+
+TEST_CASE("gated generation rows say so and stay out of the file until enabled") {
+    SwitchboardFixture off;
+    CHECK(off.row("generate_sample")->isChecked());  // the user's choice is on
+    CHECK_FALSE(off.offers("generate_sample"));      // the capability filter drops it
+    CHECK(labels_reading(off.board, "Not offered until you enable music generation.") == 2);
+
+    SwitchboardFixture on{assistant::Capabilities{true}};
+    CHECK(on.offers("generate_sample"));
+    CHECK(labels_reading(on.board, "Not offered until you enable music generation.") == 0);
+}
+
+TEST_CASE("the settings dialog hosts the switchboard in a tab and relays its changes") {
+    assistant::FunctionToggles toggles;
+    ui::SettingsDialog dialog(toggles, {});
+    QSignalSpy relayed(&dialog, &ui::SettingsDialog::toggles_changed);
+    dialog.show();
+    (void)QTest::qWaitForWindowExposed(&dialog);
+
+    QTabWidget* tabs = dialog.findChild<QTabWidget*>();
+    REQUIRE(tabs);
+    CHECK(tabs->tabText(0) == "Assistant Functions");
+
+    dialog.findChild<QCheckBox*>("set_tempo")->click();
+    CHECK(relayed.count() == 1);
+    CHECK(toggles.state("set_tempo") == false);
+}
+
+TEST_CASE("MainWindow offers a Settings action with the platform preferences shortcut") {
+    auto ids = make_fixture();
+    ProjectHistory history(std::move(ids.project));
+    StubTransport transport;
+    StubAudition audition;
+    assistant::FunctionToggles toggles;
+    ui::MainWindow window(history, transport, audition, toggles, "Test");
+
+    QAction* settings = nullptr;
+    for (QAction* action : window.actions())
+        if (action->text() == "Settings") settings = action;
+    REQUIRE(settings);
+    CHECK(settings->shortcut() == QKeySequence(QKeySequence::Preferences));
 }
 
 int main(int argc, char** argv) {
