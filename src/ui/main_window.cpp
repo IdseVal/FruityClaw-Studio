@@ -12,6 +12,7 @@
 
 #include "ui/arrangement_view.h"
 #include "ui/pattern_palette.h"
+#include "ui/record_bar.h"
 #include "ui/sample_browser.h"
 #include "ui/theme.h"
 
@@ -30,8 +31,8 @@ QLabel* section_header(const QString& text, QWidget* parent) {
 }  // namespace
 
 MainWindow::MainWindow(core::ProjectHistory& history, core::TransportPort& transport,
-                       core::AuditionPort& audition, const QString& product_name,
-                       QWidget* parent)
+                       core::AuditionPort& audition, core::RecorderPort& recorder,
+                       const QString& product_name, QWidget* parent)
     : QMainWindow(parent), history_(history), transport_(transport) {
     setWindowTitle(product_name);
     resize(1200, 640);
@@ -80,6 +81,11 @@ MainWindow::MainWindow(core::ProjectHistory& history, core::TransportPort& trans
     tempo_label_->setStyleSheet(
         QString("color: %1; font-size: 12px;").arg(theme::kTextSecondary.name()));
     bar->addWidget(tempo_label_);
+
+    record_bar_ = new RecordBar(history_, recorder, bar);
+    bar->addWidget(record_bar_);
+    connect(record_bar_, &RecordBar::hint_changed, this,
+            [this](const QString& hint) { statusBar()->showMessage(hint); });
 
     auto* spacer = new QWidget(bar);
     spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);

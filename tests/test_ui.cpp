@@ -1,8 +1,10 @@
 // Interaction tests for the Qt layer, from the confirmed FMEA table
 // (tests/FMEA-arrangement-view.md, PR #30 interview): ArrangementView
 // geometry and hit-testing, drag commit atomicity, rename-editor failure
-// routing, MainWindow's undo/redo and transport bindings, and the Sample
-// sidebar (issue #12): audition, provenance mark, placing into a Pattern.
+// routing, MainWindow's undo/redo and transport bindings, the Sample
+// sidebar (issue #12): audition, provenance mark, placing into a Pattern,
+// and the recording controls (issue #14): input choice, record/stop, the
+// take landing in the Project as a Human Sample.
 //
 // Runs on the offscreen platform; simulated input only. The tests replicate
 // the view's layout constants (header 160 px, ruler 28 px, track 56 px,
@@ -13,6 +15,7 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QComboBox>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
@@ -30,6 +33,7 @@
 #include "ui/arrangement_view.h"
 #include "ui/assistant_key_dialog.h"
 #include "ui/main_window.h"
+#include "ui/record_bar.h"
 #include "ui/sample_browser.h"
 
 using namespace core;
@@ -65,6 +69,75 @@ struct StubTransport : TransportPort {
 struct StubAudition : AuditionPort {
     std::vector<SampleSource> played;
     void audition(SampleSource audio) override { played.push_back(std::move(audio)); }
+};
+
+// A recorder port with two inputs, one of which refuses to open, that hands
+// back a fixed take when a recording stops.
+struct StubRecorder : RecorderPort {
+    int selected = -1;
+    bool recording = false;
+    SampleSource take = test_support::make_tone(0.3, 330.0);
+    std::vector<int> selections;
+
+    std::vector<InputInfo> inputs() override {
+        return {{7, "Mic", "Stub", 1}, {9, "Broken", "Stub", 2}};
+    }
+    int selected_input() const override { return selected; }
+    std::string select_input(int id) override {
+        selections.push_back(id);
+        if (id == 9) return "Could not open that input: busy";
+        selected = id;
+        return {};
+    }
+    bool start_recording() override {
+        if (selected < 0 || recording) return false;
+        recording = true;
+        return true;
+    }
+    SampleSource stop_recording() override {
+        if (!recording) return nullptr;
+        recording = false;
+        return take;
+    }
+    RecorderStatus status() override {
+        RecorderStatus s;
+        s.recording = recording;
+        s.input_open = selected >= 0;
+        s.frames = recording ? 4800 : 0;
+        s.sample_rate = 48000.0;
+        s.peak = 0.5f;
+        return s;
+    }
+};
+
+struct RecordFixture {
+    test_support::Fixture ids = make_fixture();
+    ProjectHistory history;
+    StubRecorder recorder;
+    ui::RecordBar bar;
+    QComboBox* inputs = nullptr;
+    QToolButton* record = nullptr;
+    QSignalSpy hints;
+
+    RecordFixture()
+        : history(std::move(ids.project)), bar(history, recorder),
+          hints(&bar, &ui::RecordBar::hint_changed) {
+        bar.show();
+        (void)QTest::qWaitForWindowExposed(&bar);
+        inputs = bar.findChild<QComboBox*>();
+        record = bar.findChild<QToolButton*>();
+        REQUIRE(inputs);
+        REQUIRE(record);
+    }
+
+    // The combo's own activation path: what a mouse pick sends.
+    void pick(int index) {
+        inputs->setCurrentIndex(index);
+        emit inputs->activated(index);
+    }
+    QString last_hint() const {
+        return hints.isEmpty() ? QString() : hints.last().at(0).toString();
+    }
 };
 
 // The sidebar over the fixture plus one AI-generated Sample (section 6.3).
@@ -309,7 +382,8 @@ TEST_CASE("MainWindow's undo and redo actions follow HistoryState") {
     ProjectHistory history(std::move(ids.project));
     StubTransport transport;
     StubAudition audition;
-    ui::MainWindow window(history, transport, audition, "Test");
+    StubRecorder recorder;
+    ui::MainWindow window(history, transport, audition, recorder, "Test");
     window.show();
     (void)QTest::qWaitForWindowExposed(&window);
 
@@ -347,7 +421,8 @@ TEST_CASE("MainWindow's transport poll reflects the port's status") {
     ProjectHistory history(std::move(ids.project));
     StubTransport transport;
     StubAudition audition;
-    ui::MainWindow window(history, transport, audition, "Test");
+    StubRecorder recorder;
+    ui::MainWindow window(history, transport, audition, recorder, "Test");
     window.show();
     (void)QTest::qWaitForWindowExposed(&window);
 
@@ -699,4 +774,73 @@ int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication app(argc, argv);
     return Catch::Session().run(argc, argv);
+}
+
+TEST_CASE("RecordBar lists the port's inputs and routes the pick to the port") {
+    RecordFixture f;
+    REQUIRE(f.inputs->count() == 3);
+    CHECK(f.inputs->itemText(0) == "No input");
+    CHECK(f.inputs->itemText(1) == "Mic (Stub)");
+    CHECK(f.inputs->itemText(2) == "Broken (Stub)");
+    CHECK_FALSE(f.record->isEnabled());  // nothing to record from yet
+
+    f.pick(1);
+    CHECK(f.recorder.selections == std::vector<int>{7});
+    CHECK(f.inputs->currentIndex() == 1);
+    CHECK(f.record->isEnabled());
+    CHECK(f.last_hint() == "Recording from Mic (Stub). Press R to record.");
+}
+
+TEST_CASE("an input that will not open is reported and the pick reverts") {
+    RecordFixture f;
+    f.pick(2);
+    CHECK(f.recorder.selections == std::vector<int>{9});
+    CHECK(f.inputs->currentIndex() == 0);
+    CHECK_FALSE(f.record->isEnabled());
+    CHECK(f.last_hint() == "Could not open that input: busy");
+}
+
+TEST_CASE("record then stop adds the take as one Human Sample, undoable") {
+    RecordFixture f;
+    Project before = f.history.read();
+    f.pick(1);
+
+    QTest::mouseClick(f.record, Qt::LeftButton);
+    CHECK(f.recorder.recording);
+    CHECK(f.record->text() == "Stop Rec");
+    CHECK(f.history.read().samples.items.size() == before.samples.items.size());
+    QLabel* length = nullptr;
+    for (QLabel* label : f.bar.findChildren<QLabel*>())
+        if (label->text() == "0:00.1") length = label;
+    CHECK(length);
+
+    QTest::mouseClick(f.record, Qt::LeftButton);
+    CHECK_FALSE(f.recorder.recording);
+    CHECK(f.record->text() == "Record");
+    const auto& samples = f.history.read().samples.items;
+    REQUIRE(samples.size() == before.samples.items.size() + 1);
+    CHECK(samples.back().name == "Take 1");
+    CHECK(samples.back().source == f.recorder.take);
+    CHECK(samples.back().provenance.is_human());
+    CHECK(f.history.state().undo_label == "Add Sample 'Take 1'");
+    CHECK(f.last_hint() == "Recorded 'Take 1' (0.3 s).");
+
+    // A second take gets the next free name.
+    QTest::mouseClick(f.record, Qt::LeftButton);
+    QTest::mouseClick(f.record, Qt::LeftButton);
+    CHECK(f.history.read().samples.items.back().name == "Take 2");
+
+    REQUIRE(f.history.undo());
+    REQUIRE(f.history.undo());
+    CHECK(f.history.read() == before);
+}
+
+TEST_CASE("recording with no input chosen is refused with a hint") {
+    RecordFixture f;
+    // The button is disabled, so its shortcut is too; the port must still
+    // refuse if asked directly, and nothing reaches the Project.
+    CHECK_FALSE(f.recorder.start_recording());
+    QTest::keyClick(&f.bar, Qt::Key_R);
+    CHECK_FALSE(f.recorder.recording);
+    CHECK(f.history.read().samples.items.size() == 2);
 }
