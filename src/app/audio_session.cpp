@@ -122,7 +122,9 @@ core::SampleSource AudioSession::stop_recording() { return recorder_.stop(); }
 core::RecorderStatus AudioSession::status() {
     core::RecorderStatus s = recorder_.status();
     s.input_open = running_ && !input_.is_none();
-    if (s.sample_rate == 0.0) s.sample_rate = sample_rate_;
+    // The session owns the stream rate; the Recorder only learns it when a
+    // take starts, so its value is stale between takes.
+    s.sample_rate = sample_rate_;
     return s;
 }
 
