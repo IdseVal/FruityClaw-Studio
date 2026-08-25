@@ -26,6 +26,7 @@ endif()
 add_subdirectory(src/core)
 add_subdirectory(src/engine)
 add_subdirectory(src/assistant)
+add_subdirectory(src/effects)
 
 if(FCS_BUILD_AUDIO)
   add_subdirectory(src/audioio)
@@ -35,6 +36,23 @@ if(FCS_BUILD_UI)
   add_subdirectory(src/ui)
   add_subdirectory(src/app)
 endif()
+
+# ADR-001 / ADR-008: the licence notices of everything vendored under
+# third_party/, generated at configure time so the file cannot drift from
+# the sources, and shipped in every artefact.
+set(THIRD_PARTY_NOTICES ${CMAKE_BINARY_DIR}/THIRD_PARTY_NOTICES.txt)
+file(WRITE ${THIRD_PARTY_NOTICES} "Third-party notices
+")
+file(GLOB THIRD_PARTY_LICENCES third_party/*/LICENSE third_party/*/COPYING)
+foreach(licence ${THIRD_PARTY_LICENCES})
+  get_filename_component(component ${licence} DIRECTORY)
+  get_filename_component(component ${component} NAME)
+  file(READ ${licence} text)
+  file(APPEND ${THIRD_PARTY_NOTICES} "
+==== ${component} ====
+
+${text}")
+endforeach()
 
 if(FCS_BUILD_TESTS)
   enable_testing()

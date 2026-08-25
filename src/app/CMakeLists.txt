@@ -10,7 +10,7 @@ add_executable(app
 target_compile_definitions(app PRIVATE
   FCS_PRODUCT_NAME_STR="${FCS_PRODUCT_NAME}"
   FCS_APP_ID_STR="${FCS_APP_ID}")
-target_link_libraries(app PRIVATE core engine audioio assistant ui)
+target_link_libraries(app PRIVATE core engine effects audioio assistant ui)
 if(WIN32)
   target_link_libraries(app PRIVATE crypt32)  # DPAPI seals the generation key
 endif()

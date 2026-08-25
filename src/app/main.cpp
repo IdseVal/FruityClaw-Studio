@@ -14,6 +14,7 @@
 #include "assistant/key_store.h"
 #include "audioio/portaudio_device.h"
 #include "core/history.h"
+#include "effects/stock_effects.h"
 #include "engine/engine.h"
 #include "engine/recorder.h"
 #include "ui/assistant_key_dialog.h"
@@ -27,6 +28,7 @@ int main(int argc, char** argv) {
     core::ProjectHistory history(app::make_demo_project());
     engine::Engine player;
     engine::Recorder recorder;
+    player.set_processor_factory(effects::make_effect);
 
     // A machine with no usable audio still gets a fully working editor — the
     // Studio stands on its own (core document 1.1a); it is just silent.

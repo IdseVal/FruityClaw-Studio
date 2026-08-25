@@ -14,10 +14,15 @@
 #pragma once
 #define __audioeffect__
 
+// The plugin headers include <math.h> after this file and use M_PI, which
+// MSVC only defines on request.
+#ifndef _USE_MATH_DEFINES
+#define _USE_MATH_DEFINES
+#endif
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 
 typedef int32_t VstInt32;
 typedef void* audioMasterCallback;
@@ -30,8 +35,9 @@ const VstInt32 kVstMaxProductStrLen = 64;
 const VstInt32 kVstMaxVendorStrLen = 64;
 
 inline void vst_strncpy(char* dst, const char* src, size_t max_len) {
-    strncpy(dst, src, max_len);
-    dst[max_len] = 0;
+    size_t i = 0;
+    for (; i < max_len && src[i]; ++i) dst[i] = src[i];
+    dst[i] = 0;
 }
 
 inline void float2string(float value, char* text, VstInt32 max_len) {
