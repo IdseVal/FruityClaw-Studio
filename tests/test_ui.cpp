@@ -14,6 +14,9 @@
 #include <QApplication>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMessageBox>
+#include <QPushButton>
+#include <QTimer>
 #include <QMouseEvent>
 #include <QSignalSpy>
 #include <QToolButton>
@@ -358,4 +361,79 @@ TEST_CASE("MainWindow's title carries the dirty marker and the File actions exis
     CHECK(texts.contains("&Open..."));
     CHECK(texts.contains("&Save"));
     CHECK(texts.contains("Save &As..."));
+}
+
+namespace {
+
+// Answers the next modal QMessageBox with `button`, from the event loop. The
+// box is created inside closeEvent, so it cannot be found before close() runs.
+void answer_next_message_box(QMessageBox::StandardButton button) {
+    auto* timer = new QTimer(QApplication::instance());
+    timer->setInterval(10);
+    QObject::connect(timer, &QTimer::timeout, timer, [timer, button] {
+        auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+        if (!box) return;
+        timer->stop();
+        timer->deleteLater();
+        box->button(button)->click();
+    });
+    timer->start();
+}
+
+struct DirtyWindowFixture {
+    test_support::Fixture ids = make_fixture();
+    core::ProjectHistory history;
+    StubTransport transport;
+    int saves = 0;
+    ui::MainWindow window;
+
+    DirtyWindowFixture()
+        : history(std::move(ids.project)),
+          window(history, transport,
+                 ui::ProjectFilePort{[this](const std::filesystem::path&) {
+                                         ++saves;
+                                         return std::string{};
+                                     },
+                                     {}},
+                 "Test") {
+        window.show();
+        (void)QTest::qWaitForWindowExposed(&window);
+        auto rename = rename_track(history.read(), ids.arrangement, ids.track_a, "Dirty");
+        REQUIRE(rename.ok());
+        REQUIRE(history.apply(std::move(*rename)) == core::ApplyResult::Applied);
+        REQUIRE(history.state().is_dirty);
+    }
+};
+
+}  // namespace
+
+// FMEA-project-file.md row 4: a dirty Project must not close without asking,
+// and Cancel must keep the window open.
+TEST_CASE("closing a dirty MainWindow asks first; Cancel keeps it open") {
+    DirtyWindowFixture f;
+    answer_next_message_box(QMessageBox::Cancel);
+    CHECK_FALSE(f.window.close());
+    CHECK(f.window.isVisible());
+    CHECK(f.history.state().is_dirty);
+    CHECK(f.saves == 0);
+}
+
+TEST_CASE("closing a dirty MainWindow with Discard closes it without saving") {
+    DirtyWindowFixture f;
+    answer_next_message_box(QMessageBox::Discard);
+    CHECK(f.window.close());
+    CHECK_FALSE(f.window.isVisible());
+    CHECK(f.saves == 0);
+}
+
+TEST_CASE("closing a clean MainWindow never asks") {
+    auto ids = make_fixture();
+    core::ProjectHistory history(std::move(ids.project));
+    StubTransport transport;
+    ui::MainWindow window(history, transport, {}, "Test");
+    window.show();
+    (void)QTest::qWaitForWindowExposed(&window);
+    // No answerer is armed: a prompt here would hang the test.
+    CHECK(window.close());
+    CHECK_FALSE(window.isVisible());
 }
