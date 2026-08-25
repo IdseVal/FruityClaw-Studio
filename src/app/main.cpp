@@ -65,7 +65,7 @@ int main(int argc, char** argv) {
         player.publish(history.read(), sample_rate);
     });
 
-    ui::MainWindow window(history, player, FCS_PRODUCT_NAME_STR);
+    ui::MainWindow window(history, player, player, FCS_PRODUCT_NAME_STR);
     window.show();
 
     int result = qt_app.exec();
