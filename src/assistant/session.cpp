@@ -70,21 +70,22 @@ TurnOutcome AssistantSession::run_turn(const std::string& prompt, core::Project 
     }
 
     TurnOutcome executed = execute(std::move(reply.tool_uses), std::move(project), focused,
-                                   Focus{}, std::move(reply.text), std::nullopt);
+                                   Focus{}, std::move(reply.text), {});
     executed.manifest_hash = file.manifest_hash;
     return executed;
 }
 
 TurnOutcome AssistantSession::resume(PendingChoice pending, core::Id chosen,
                                      core::Project project) {
+    Answers answers = std::move(pending.answered);
+    answers[pending.argument] = chosen;
     return execute(std::move(pending.remaining), std::move(project), pending.focused,
-                   pending.last_created, std::move(pending.text),
-                   Override{std::move(pending.argument), chosen});
+                   pending.last_created, std::move(pending.text), std::move(answers));
 }
 
 TurnOutcome AssistantSession::execute(std::vector<ToolUse> tool_uses, core::Project working,
                                       Focus focused, Focus last_created, std::string text,
-                                      std::optional<Override> first_override) {
+                                      Answers first_answers) {
     TurnOutcome outcome;
 
     for (std::size_t i = 0; i < tool_uses.size(); ++i) {
@@ -114,9 +115,12 @@ TurnOutcome AssistantSession::execute(std::vector<ToolUse> tool_uses, core::Proj
                     value);
                 continue;
             }
-            if (i == 0 && first_override && first_override->argument == property.name) {
-                resolved[property.name] = first_override->id;
-                continue;
+            if (i == 0) {
+                auto answered = first_answers.find(property.name);
+                if (answered != first_answers.end()) {
+                    resolved[property.name] = answered->second;
+                    continue;
+                }
             }
             std::string error;
             std::vector<Candidate> candidates;
@@ -135,6 +139,7 @@ TurnOutcome AssistantSession::execute(std::vector<ToolUse> tool_uses, core::Proj
                                   " did you mean by '" + selector->name + "'?";
                 choice.candidates = std::move(candidates);
                 choice.argument = property.name;
+                if (i == 0) choice.answered = first_answers;
                 choice.remaining.assign(tool_uses.begin() + static_cast<std::ptrdiff_t>(i),
                                         tool_uses.end());
                 choice.focused = focused;

@@ -14,6 +14,7 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -29,8 +30,12 @@ struct PendingChoice {
     std::string question;
     std::vector<Candidate> candidates;
 
-    // Resume state. The stalled Function is `remaining.front()`.
+    // Resume state. The stalled Function is `remaining.front()`; `argument`
+    // is the Selector being asked about and `answered` holds the choices
+    // already made for that same Function, so a second ambiguous Selector
+    // does not re-ask the first question.
     std::string argument;
+    std::map<std::string, core::Id> answered;
     std::vector<ToolUse> remaining;
     Focus focused;
     Focus last_created;
@@ -57,13 +62,10 @@ public:
     TurnOutcome resume(PendingChoice pending, core::Id chosen, core::Project project);
 
 private:
-    struct Override {
-        std::string argument;
-        core::Id id;
-    };
+    // Selector answers for `tool_uses.front()`, keyed by argument name.
+    using Answers = std::map<std::string, core::Id>;
     TurnOutcome execute(std::vector<ToolUse> tool_uses, core::Project working, Focus focused,
-                        Focus last_created, std::string text,
-                        std::optional<Override> first_override);
+                        Focus last_created, std::string text, Answers first_answers);
 
     const Registry& registry_;
     AssistantTransport& transport_;
