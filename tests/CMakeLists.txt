@@ -10,12 +10,29 @@ add_executable(core_tests
   test_history.cpp
   test_arrangement_functions.cpp
   test_engine.cpp
+  test_engine_stress.cpp
 )
 target_link_libraries(core_tests PRIVATE core engine Catch2::Catch2WithMain)
 
 include(CTest)
 include(Catch)
 catch_discover_tests(core_tests)
+
+# The Qt interaction suite from the confirmed FMEA table
+# (FMEA-arrangement-view.md). Only built with the UI; supplies its own main
+# so a QApplication exists, and forces the offscreen platform itself.
+if(TARGET ui)
+  find_package(Qt6 COMPONENTS Test QUIET)
+  if(Qt6Test_FOUND)
+    add_executable(ui_tests test_ui.cpp)
+    target_link_libraries(ui_tests PRIVATE ui Catch2::Catch2 Qt6::Test)
+    # Qt's DLLs are not on PATH on Windows; point discovery and the tests at
+    # the installed Qt bin directory.
+    catch_discover_tests(ui_tests DL_PATHS "$<TARGET_FILE_DIR:Qt6::Core>")
+  else()
+    message(STATUS "Qt6Test not found; ui_tests skipped")
+  endif()
+endif()
 
 # Invariant I10: no product name and no retired vocabulary in identifiers.
 find_package(Python3 COMPONENTS Interpreter)
