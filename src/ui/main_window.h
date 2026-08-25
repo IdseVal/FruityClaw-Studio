@@ -6,11 +6,13 @@
 
 #include <QMainWindow>
 
+#include "core/generation.h"
 #include "core/history.h"
 #include "core/playback.h"
 
 class QLabel;
 class QToolButton;
+class QAction;
 
 namespace ui {
 
@@ -25,7 +27,17 @@ class MainWindow : public QMainWindow {
 public:
     MainWindow(core::ProjectHistory& history, core::TransportPort& transport,
                core::AuditionPort& audition, core::RecorderPort& recorder,
-               const QString& product_name, QWidget* parent = nullptr);
+               core::GenerationSettingsPort& generation, const QString& product_name,
+               QWidget* parent = nullptr);
+
+    // Opens the music-generation settings page; `guidance`, when given, tells
+    // the user what they tried and why they landed here.
+    void open_generation_settings(const QString& guidance = {});
+
+    // What a surface that wants to generate does: with generation on it
+    // proceeds, with it off the user is guided to the settings page rather
+    // than shown a dead control (core document 6.4: gated, not absent).
+    void request_generation();
 
 private:
     void refresh_transport();
@@ -33,6 +45,7 @@ private:
 
     core::ProjectHistory& history_;
     core::TransportPort& transport_;
+    core::GenerationSettingsPort& generation_;
 
     ArrangementView* arrangement_view_ = nullptr;
     PatternPalette* palette_ = nullptr;
@@ -43,6 +56,7 @@ private:
     QLabel* tempo_label_ = nullptr;
     QAction* undo_action_ = nullptr;
     QAction* redo_action_ = nullptr;
+    QAction* generate_action_ = nullptr;
 };
 
 }  // namespace ui

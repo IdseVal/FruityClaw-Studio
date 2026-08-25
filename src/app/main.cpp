@@ -5,6 +5,7 @@
 
 #include "app/audio_session.h"
 #include "app/demo_project.h"
+#include "app/generation_file.h"
 #include "audioio/portaudio_device.h"
 #include "core/history.h"
 #include "engine/engine.h"
@@ -31,7 +32,12 @@ int main(int argc, char** argv) {
         player.publish(history.read(), session.sample_rate());
     });
 
-    ui::MainWindow window(history, player, player, session, FCS_PRODUCT_NAME_STR);
+    // Music generation: off until the user chooses a model in settings (core
+    // document 6.4). The choice and any key live in the per-user config dir.
+    app::GenerationFile generation(app::GenerationFile::default_directory());
+
+    ui::MainWindow window(history, player, player, session, generation,
+                          FCS_PRODUCT_NAME_STR);
     window.show();
 
     int result = qt_app.exec();

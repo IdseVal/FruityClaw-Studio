@@ -9,6 +9,7 @@ add_library(ui STATIC
   pattern_palette.cpp
   sample_browser.cpp
   record_bar.cpp
+  generation_settings_page.cpp
   main_window.cpp
 )
 target_include_directories(ui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
