@@ -61,6 +61,11 @@ public:
     // Called by an explicit user save (issue #13). Autosaves must not call it.
     void mark_saved();
 
+    // Replaces the Project with a freshly loaded one (issue #13). The History
+    // does not survive a load: entries are discarded, the cursor is zero and
+    // the loaded state counts as saved (history contract section 8.2).
+    void replace(Project loaded);
+
     // Memory bound (contract section 9): entry count and retained bytes,
     // whichever binds first. Eviction is from the oldest end only.
     void set_limits(std::size_t max_entries, std::size_t max_bytes);

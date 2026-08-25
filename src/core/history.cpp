@@ -120,6 +120,15 @@ void ProjectHistory::mark_saved() {
     saved_cursor_ = static_cast<std::ptrdiff_t>(cursor_);
 }
 
+void ProjectHistory::replace(Project loaded) {
+    assert(!gesture_ && "replace during a gesture is a programming error");
+    project_ = std::move(loaded);
+    entries_.clear();
+    cursor_ = 0;
+    saved_cursor_ = 0;
+    notify();
+}
+
 void ProjectHistory::set_limits(std::size_t max_entries, std::size_t max_bytes) {
     max_entries_ = max_entries;
     max_bytes_ = max_bytes;
