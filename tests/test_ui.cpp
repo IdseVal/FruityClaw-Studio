@@ -32,6 +32,7 @@
 #include <QMenu>
 #include <QMouseEvent>
 #include <QSignalSpy>
+#include <QStatusBar>
 #include <QToolButton>
 #include <QtTest/QtTest>
 
@@ -1350,4 +1351,42 @@ TEST_CASE("turning generation on in Settings makes generate_sample offered on th
     dialog = window.findChild<ui::SettingsDialog*>();
     REQUIRE(dialog);
     CHECK(offered(*dialog, "generate_sample"));
+}
+
+// Round-2 wiring: the capability is derived from the store, not set by
+// hand, so a store that says "on" with a model no longer in the list must
+// read as off everywhere it is derived (the switchboard and the Generate
+// route), not only on the page that explains it.
+TEST_CASE("a store that is on with a removed model derives no capability and still guides") {
+    auto ids = make_fixture();
+    ProjectHistory history(std::move(ids.project));
+    StubTransport transport;
+    StubAudition audition;
+    StubRecorder recorder;
+    assistant::FunctionToggles toggles;
+    StubGenerationStore generation;
+    generation.kept = {true, "model-that-was-removed", "/models/gone"};
+    ui::MainWindow window(history, transport, audition, recorder, toggles, generation, "Test");
+    window.show();
+    (void)QTest::qWaitForWindowExposed(&window);
+
+    window.request_generation();
+    auto* dialog = window.findChild<ui::SettingsDialog*>();
+    REQUIRE(dialog);
+    CHECK(dialog->isVisible());
+    // Opened, not executed: the surface that sent the user here is not blocked.
+    CHECK(dialog->windowModality() != Qt::ApplicationModal);
+    CHECK_FALSE(offered(*dialog, "generate_sample"));
+    auto* page = dialog->findChild<ui::GenerationSettingsPage*>();
+    REQUIRE(page);
+    CHECK(page->isVisible());
+    CHECK(page->findChild<QLabel*>("generation_removed") != nullptr);
+
+    // Turning it off from the guided tab reaches the main window's status bar
+    // through the dialog's relay, and the store agrees.
+    page->findChild<QPushButton*>("generation_off")->click();
+    CHECK_FALSE(generation.kept.enabled);
+    CHECK(window.statusBar()->currentMessage() == "Music generation is off.");
+    dialog->close();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
 }
