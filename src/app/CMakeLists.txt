@@ -2,6 +2,7 @@
 # constructed, and the only translation unit that sees FCS_PRODUCT_NAME.
 add_executable(app
   main.cpp
+  audio_session.cpp
   demo_project.cpp
 )
 target_compile_definitions(app PRIVATE FCS_PRODUCT_NAME_STR="${FCS_PRODUCT_NAME}")
