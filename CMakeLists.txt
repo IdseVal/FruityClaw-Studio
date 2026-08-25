@@ -25,6 +25,7 @@ endif()
 
 add_subdirectory(src/core)
 add_subdirectory(src/engine)
+add_subdirectory(src/persistence)
 
 if(FCS_BUILD_AUDIO)
   add_subdirectory(src/audioio)
