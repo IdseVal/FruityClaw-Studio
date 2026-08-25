@@ -229,7 +229,7 @@ TEST_CASE("an Instrument swap on the focused Pattern touches no Event") {
     ScriptedTransport transport;
     transport.reply.tool_uses = {{"set_part_instrument",
                                   {{"pattern", focused()}, {"current", std::monostate{}},
-                                   {"instrument", named("Drum")}}}};
+                                   {"instrument", named("dru")}}}};
     AssistantSession session(registry(), transport);
     Focus focus;
     focus.pattern = f.melody_pattern;
@@ -372,4 +372,105 @@ TEST_CASE("a Function whose target vanished before apply fails cleanly in the Hi
     history.apply(*gone);
     CHECK(history.apply(outcome.deltas[0]) == core::ApplyResult::Failed);
     CHECK(history.state().undo_label == "Delete Track 'Track 2'");
+}
+
+// --- Selector resolution rules (function-surface spec section 2.3) -------------
+
+TEST_CASE("Selectors resolve locally: focus, ordinal, exact-over-partial, last created") {
+    auto f = make_fixture();
+    const core::Project& p = f.project;
+    Focus focus;
+    focus.pattern = f.melody_pattern;
+    Focus created;
+    created.track = f.track_b;
+
+    SECTION("Focused resolves to the focused slot of that kind, and nothing else") {
+        auto r = resolve(focused(), EntityKind::Pattern, p, focus, created);
+        REQUIRE(std::holds_alternative<Id>(r));
+        CHECK(std::get<Id>(r) == f.melody_pattern);
+        auto none = resolve(focused(), EntityKind::Track, p, focus, created);
+        REQUIRE(std::holds_alternative<NotFound>(none));
+        CHECK(std::get<NotFound>(none).message == "No Track is selected");
+    }
+    SECTION("LastCreated resolves per kind and is empty for other kinds") {
+        auto r = resolve(last_created(), EntityKind::Track, p, focus, created);
+        REQUIRE(std::holds_alternative<Id>(r));
+        CHECK(std::get<Id>(r) == f.track_b);
+        auto none = resolve(last_created(), EntityKind::Instrument, p, focus, created);
+        REQUIRE(std::holds_alternative<NotFound>(none));
+        CHECK(std::get<NotFound>(none).message == "No Instrument was just created");
+    }
+    SECTION("Ordinal is 1-based in authored order and refuses out-of-range positions") {
+        auto second = resolve(ordinal(2), EntityKind::Track, p, focus, created);
+        REQUIRE(std::holds_alternative<Id>(second));
+        CHECK(std::get<Id>(second) == f.track_b);
+        CHECK(std::holds_alternative<NotFound>(resolve(ordinal(0), EntityKind::Track, p, focus, created)));
+        auto beyond = resolve(ordinal(3), EntityKind::Track, p, focus, created);
+        REQUIRE(std::holds_alternative<NotFound>(beyond));
+        CHECK(std::get<NotFound>(beyond).message == "There is no Track number 3");
+    }
+    SECTION("Named matches case-insensitively and an exact match beats partial matches") {
+        auto r = resolve(named("drums a"), EntityKind::Pattern, p, focus, created);
+        REQUIRE(std::holds_alternative<Id>(r));
+        CHECK(std::get<Id>(r) == f.drum_pattern);
+
+        core::Project two = p;
+        two.patterns.items.push_back(two.patterns.items[0]);
+        two.patterns.items.back().id = core::new_id();
+        two.patterns.items.back().name = "Drums AB";
+        auto exact = resolve(named("Drums A"), EntityKind::Pattern, two, focus, created);
+        REQUIRE(std::holds_alternative<Id>(exact));
+        CHECK(std::get<Id>(exact) == f.drum_pattern);
+        auto partial = resolve(named("drums"), EntityKind::Pattern, two, focus, created);
+        REQUIRE(std::holds_alternative<Ambiguous>(partial));
+        CHECK(std::get<Ambiguous>(partial).candidates.size() == 2);
+    }
+    SECTION("Named finds a Sample and an Instrument the same way") {
+        auto s = resolve(named("Tone"), EntityKind::Sample, p, focus, created);
+        REQUIRE(std::holds_alternative<Id>(s));
+        CHECK(std::get<Id>(s) == p.samples.items[1].id);
+        auto i = resolve(named("keys"), EntityKind::Instrument, p, focus, created);
+        REQUIRE(std::holds_alternative<Id>(i));
+        CHECK(std::get<Id>(i) == p.instruments.items[1].id);
+    }
+}
+
+TEST_CASE("a Function with two ambiguous Selectors is settled by two answers, not a loop") {
+    auto f = make_fixture();
+    // A second "Drums"-ish Pattern and a second "Drum"-ish Instrument.
+    f.project.patterns.items.push_back(f.project.patterns.items[0]);
+    f.project.patterns.items.back().id = core::new_id();
+    f.project.patterns.items.back().name = "Drums B";
+    f.project.patterns.items.back().parts.clear();
+    f.project.instruments.items.push_back(f.project.instruments.items[0]);
+    f.project.instruments.items.back().id = core::new_id();
+    f.project.instruments.items.back().name = "Drum 2";
+    core::ProjectHistory history(f.project);
+
+    ScriptedTransport transport;
+    transport.reply.text = "Added the lane.";
+    transport.reply.tool_uses = {
+        {"add_part", {{"pattern", named("Drums")}, {"instrument", named("dru")}}}};
+    AssistantSession session(registry(), transport);
+
+    TurnOutcome first = session.run_turn("add drum to drums", history.read(), Toggles{}, Focus{});
+    REQUIRE(first.pending);
+    CHECK(first.pending->argument == "pattern");
+    Id pattern = f.project.patterns.items.back().id;
+
+    TurnOutcome second = session.resume(*first.pending, pattern, history.read());
+    REQUIRE(second.pending);
+    CHECK(second.pending->argument == "instrument");
+    Id instrument = f.project.instruments.items.back().id;
+
+    // The second answer must not throw the first away: the turn completes.
+    TurnOutcome done = session.resume(*second.pending, instrument, history.read());
+    CHECK_FALSE(done.pending);
+    REQUIRE(done.deltas.size() == 1);
+    CHECK(transport.requests == 1);
+    apply_all(history, done);
+    const core::Pattern* pat = history.read().patterns.find(pattern);
+    REQUIRE(pat);
+    REQUIRE(pat->parts.size() == 1);
+    CHECK(pat->parts[0].instrument == instrument);
 }
