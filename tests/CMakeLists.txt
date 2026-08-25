@@ -13,6 +13,7 @@ add_executable(core_tests
   test_effect_functions.cpp
   test_engine.cpp
   test_engine_stress.cpp
+  test_effects.cpp
   test_assistant_key.cpp
   test_function_file.cpp
   test_generation.cpp
@@ -25,7 +26,7 @@ add_executable(core_tests
   ${CMAKE_SOURCE_DIR}/src/app/audio_session.cpp
   ${CMAKE_SOURCE_DIR}/src/app/generation_file.cpp
 )
-target_link_libraries(core_tests PRIVATE core engine assistant Catch2::Catch2WithMain)
+target_link_libraries(core_tests PRIVATE core engine effects assistant Catch2::Catch2WithMain)
 # generation_file.cpp is compiled in the same way; DPAPI needs crypt32.
 target_compile_definitions(core_tests PRIVATE FCS_APP_ID_STR="${FCS_APP_ID}")
 if(WIN32)
