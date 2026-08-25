@@ -18,6 +18,7 @@
 #include <QListWidget>
 #include <QMenu>
 #include <QMouseEvent>
+#include <QPushButton>
 #include <QSignalSpy>
 #include <QToolButton>
 #include <QtTest/QtTest>
@@ -27,6 +28,7 @@
 #include "core/playback.h"
 #include "test_support.h"
 #include "ui/arrangement_view.h"
+#include "ui/assistant_key_dialog.h"
 #include "ui/main_window.h"
 #include "ui/sample_browser.h"
 
@@ -556,6 +558,123 @@ TEST_CASE("a Sample without audio lists, opens, and is handed to the port as abs
     QLabel* provenance = browser.findChild<QLabel*>("provenance");
     REQUIRE(provenance);
     CHECK(provenance->text() == "Made by hand");
+}
+
+// --- the first-open Assistant key offer (issue #18) ---------------------
+
+struct StubKeys : core::AssistantKeyPort {
+    std::optional<std::string> stored;
+    int offers = 0;
+    int store_calls = 0;
+    bool fail_store = false;
+    bool has_key() const override { return stored.has_value(); }
+    std::optional<std::string> key() const override { return stored; }
+    bool store_key(const std::string& key) override {
+        ++store_calls;
+        if (fail_store) return false;
+        stored = key;
+        return true;
+    }
+    void clear_key() override { stored.reset(); }
+    bool offer_made() const override { return offers > 0; }
+    void record_offer() override { ++offers; }
+};
+
+struct DialogFixture {
+    StubKeys keys;
+    ui::AssistantKeyDialog dialog{keys};
+    QLineEdit* field = dialog.findChild<QLineEdit*>("assistant_key_field");
+    QPushButton* save = dialog.findChild<QPushButton*>("assistant_key_save");
+    QPushButton* decline = dialog.findChild<QPushButton*>("assistant_key_decline");
+    QLabel* problem = dialog.findChild<QLabel*>("assistant_key_problem");
+    DialogFixture() {
+        REQUIRE(field);
+        REQUIRE(save);
+        REQUIRE(decline);
+        REQUIRE(problem);
+        dialog.show();
+        (void)QTest::qWaitForWindowExposed(&dialog);
+    }
+};
+
+// The message the issue asks for: what the key is for, and what happens
+// without it, stated in the dialog's own words.
+QString all_label_text(const QDialog& dialog) {
+    QString text;
+    for (QLabel* label : dialog.findChildren<QLabel*>()) text += label->text() + '\n';
+    return text;
+}
+
+TEST_CASE("the offer says plainly what the key is for and that declining loses nothing") {
+    DialogFixture f;
+    QString text = all_label_text(f.dialog);
+    CHECK(text.contains("The Assistant is optional"));
+    CHECK(text.contains("needs something from you: a private API key"));
+    CHECK(text.contains("Without a key the Assistant stays off and nothing else changes"));
+    CHECK(text.contains("never written to a log"));
+    CHECK(f.decline->text() == "Continue without a key");
+    CHECK(f.save->text() == "Save key");
+}
+
+TEST_CASE("declining stores nothing and records the offer, so it is never repeated") {
+    DialogFixture f;
+    QTest::mouseClick(f.decline, Qt::LeftButton);
+    CHECK(f.dialog.result() == QDialog::Rejected);
+    CHECK_FALSE(f.keys.has_key());
+    CHECK(f.keys.store_calls == 0);
+    CHECK(f.keys.offer_made());
+    CHECK(f.keys.offers == 1);
+}
+
+TEST_CASE("closing the dialog any other way counts as declining") {
+    DialogFixture f;
+    QTest::keyClick(&f.dialog, Qt::Key_Escape);
+    CHECK(f.dialog.result() == QDialog::Rejected);
+    CHECK_FALSE(f.keys.has_key());
+    CHECK(f.keys.offer_made());
+}
+
+TEST_CASE("the key field hides what is pasted and Save waits for a key") {
+    DialogFixture f;
+    CHECK(f.field->echoMode() == QLineEdit::Password);
+    CHECK_FALSE(f.save->isEnabled());
+    f.field->setText("   ");
+    CHECK_FALSE(f.save->isEnabled());
+    f.field->setText("sk-abc");
+    CHECK(f.save->isEnabled());
+}
+
+TEST_CASE("saving keeps the trimmed key, records the offer and closes") {
+    DialogFixture f;
+    f.field->setText("  sk-live-key-42 \t ");
+    QTest::mouseClick(f.save, Qt::LeftButton);
+    CHECK(f.dialog.result() == QDialog::Accepted);
+    REQUIRE(f.keys.stored.has_value());
+    CHECK(*f.keys.stored == "sk-live-key-42");
+    CHECK(f.keys.offer_made());
+    CHECK(f.field->text().isEmpty());  // nothing left behind in the widget
+}
+
+TEST_CASE("Enter in the key field saves") {
+    DialogFixture f;
+    f.field->setText("sk-enter");
+    QTest::keyClick(f.field, Qt::Key_Return);
+    CHECK(f.dialog.result() == QDialog::Accepted);
+    CHECK(f.keys.stored == std::optional<std::string>("sk-enter"));
+}
+
+TEST_CASE("a key that cannot be kept is said so, and the dialog stays open") {
+    DialogFixture f;
+    f.keys.fail_store = true;
+    f.field->setText("sk-unsaveable");
+    QTest::mouseClick(f.save, Qt::LeftButton);
+    CHECK(f.dialog.isVisible());
+    CHECK(f.problem->isVisible());
+    CHECK(f.problem->text().contains("could not be saved"));
+    CHECK_FALSE(f.keys.has_key());
+    CHECK_FALSE(f.keys.offer_made());  // still unanswered
+    f.field->setText("sk-retry");
+    CHECK_FALSE(f.problem->isVisible());
 }
 
 int main(int argc, char** argv) {

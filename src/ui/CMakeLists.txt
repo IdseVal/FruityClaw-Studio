@@ -9,6 +9,7 @@ add_library(ui STATIC
   pattern_palette.cpp
   sample_browser.cpp
   main_window.cpp
+  assistant_key_dialog.cpp
 )
 target_include_directories(ui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_link_libraries(ui PUBLIC core Qt6::Widgets)
