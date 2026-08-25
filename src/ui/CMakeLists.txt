@@ -7,6 +7,7 @@ set(CMAKE_AUTOMOC ON)
 add_library(ui STATIC
   arrangement_view.cpp
   pattern_palette.cpp
+  provenance.cpp
   sample_browser.cpp
   record_bar.cpp
   function_switchboard.cpp

@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "ui/provenance.h"
 #include "ui/theme.h"
 
 namespace ui {
@@ -355,6 +356,12 @@ void ArrangementView::paint_placement(QPainter& painter, const core::Pattern* pa
         painter.setFont(font);
         painter.drawText(rect.adjusted(6, 2, -4, 0), Qt::AlignTop | Qt::AlignLeft,
                          QString::fromStdString(pattern->name));
+    }
+
+    // Section 6.3: a generated Pattern is marked wherever it appears, so
+    // the mark rides on every Placement of it, in the bottom-right corner.
+    if (pattern && !pattern->provenance.is_human() && rect.width() >= 20) {
+        paint_provenance_mark(painter, QRect(rect.right() - 15, rect.bottom() - 12, 14, 10));
     }
 }
 
