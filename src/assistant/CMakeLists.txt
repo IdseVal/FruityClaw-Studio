@@ -1,8 +1,12 @@
 # src/assistant — behind seam D (architecture-seams section 5). Links core
-# only: no Qt, no engine. Today it holds the Assistant key store; the Function
-# registry, Function file and LLM transport (issues #6, #16, #17) land here.
+# only: no Qt, no engine. Holds the Assistant key store, the Function
+# registry, the toggle store and the Function file builder; the LLM
+# transport (#16) lands here too.
 add_library(assistant STATIC
   key_store.cpp
+  registry.cpp
+  toggles.cpp
+  function_file.cpp
 )
 target_include_directories(assistant PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
 # The config directory derives from the app id, never a product name

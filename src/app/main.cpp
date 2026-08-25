@@ -9,6 +9,7 @@
 
 #include "app/audio_session.h"
 #include "app/demo_project.h"
+#include "app/toggle_file.h"
 #include "assistant/key_store.h"
 #include "audioio/portaudio_device.h"
 #include "core/history.h"
@@ -19,6 +20,8 @@
 
 int main(int argc, char** argv) {
     QApplication qt_app(argc, argv);
+    // Config and data paths derive from the app id, never the product name.
+    QCoreApplication::setApplicationName(FCS_APP_ID_STR);
 
     core::ProjectHistory history(app::make_demo_project());
     engine::Engine player;
@@ -37,7 +40,10 @@ int main(int argc, char** argv) {
         player.publish(history.read(), session.sample_rate());
     });
 
-    ui::MainWindow window(history, player, player, session, FCS_PRODUCT_NAME_STR);
+    assistant::FunctionToggles toggles = app::load_toggles();
+    ui::MainWindow window(history, player, player, session, toggles, FCS_PRODUCT_NAME_STR);
+    QObject::connect(&window, &ui::MainWindow::toggles_changed,
+                     [&toggles] { app::save_toggles(toggles); });
 
     // The Assistant key: offered once, on first open, over a Studio that is
     // already complete (core document 1.1a). A decline is never asked again;
