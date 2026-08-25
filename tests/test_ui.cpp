@@ -709,6 +709,23 @@ TEST_CASE("reopened with a key already saved, the dialog says so and keeps it on
     CHECK(keys.store_calls == 0);
 }
 
+TEST_CASE("reopened with a key already saved, pasting a new one replaces it") {
+    StubKeys keys;
+    keys.stored = "sk-old";
+    ui::AssistantKeyDialog dialog{keys};
+    dialog.show();
+    (void)QTest::qWaitForWindowExposed(&dialog);
+    QLineEdit* field = dialog.findChild<QLineEdit*>("assistant_key_field");
+    REQUIRE(field);
+    // The saved key is never pre-filled: the field starts empty.
+    CHECK(field->text().isEmpty());
+    field->setText("sk-new");
+    QTest::keyClick(field, Qt::Key_Return);
+    CHECK(keys.store_calls == 1);
+    CHECK(keys.stored == "sk-new");
+    CHECK_FALSE(dialog.isVisible());
+}
+
 TEST_CASE("on first open nothing claims a key is saved") {
     DialogFixture f;
     CHECK(f.dialog.findChild<QLabel*>("assistant_key_saved") == nullptr);
