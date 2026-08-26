@@ -12,6 +12,7 @@ dispatcher:
   idle_minutes_before_nudge: 15      # agent silent this long without a PR/label -> one nudge
   idle_minutes_after_nudge: 15       # still silent -> label needs-human
   cleanup_worktrees_on_merge: true   # remove the developer worktree when its PR merges into dev
+  degraded_ticks_before_page: 3      # consecutive ticks that could not read GitHub/Orca before paging
   docs_only:                         # a PR touching only these is auto state:tested (tester skipped)
     prefixes: [docs/]
     suffixes: [.md, .txt]

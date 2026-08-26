@@ -39,7 +39,7 @@ then `needs-human`; PR with no state label -> docs-only gets `state:tested` auto
 otherwise spawn the Tester; `state:tested` -> spawn the Reviewer, who merges into `dev`;
 `state:blocked` -> back to the Developer's session under the 3-cycle breaker, else
 `escalated`; merged -> close the issue, remove the worktree; `needs-human` -> page the
-human and wait; pipeline drained -> spawn a PO & Analyst backlog audit, whose outcome
+human and wait; pipeline drained (**observed**, not merely unread) -> spawn a PO & Analyst backlog audit, whose outcome
 (new issues, or a PR marking the core document `Status: ACHIEVED`) is read from GitHub,
 never from the agent; `ACHIEVED` on `dev` -> stop dispatching and page the human once
 (`onboard` then starts a revision interview that reopens the gate).
@@ -54,7 +54,7 @@ docs-only rules, `github_mention`). `circuit_breaker.max_cycles` (do not raise i
 | What breaks | What happens |
 | --- | --- |
 | Orca not open | worktree/terminal calls fail; the tick logs it and retries next tick. Nothing is lost. |
-| `gh` unauthenticated | the tick sees no issues/PRs and does nothing. `doctor` says so. |
+| `gh`/`orca`/`git` failing | the tick names the reads it could not make, reconciles **nothing**, and pages the human after `degraded_ticks_before_page` ticks in a row. A failed read is never mistaken for an empty repository. |
 | State file deleted | at most a duplicate comment or a second nudge; truth is in GitHub/Orca. |
 | Agent ends without label/PR | nudge after `idle_minutes_before_nudge`, `needs-human` after `idle_minutes_after_nudge`. |
 | Agent sets `needs-human` | human is @mentioned on GitHub (+ e-mail if SMTP set), Orca tab brought forward; dispatcher waits. |

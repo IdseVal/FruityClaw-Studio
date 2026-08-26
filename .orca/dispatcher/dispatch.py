@@ -19,6 +19,15 @@ WHERE IT RUNS
 
 WHAT IT DOES EACH TICK (the contract; `~/.orca/roles/dispatcher.md` is the human-readable
 policy for the same thing)
+    Observation (what the whole tick rests on)
+      - A read that FAILED is not a read that returned nothing. `gh_json` and `orca_json`
+        return `FAILED` for the first and `None`/empty for the second, and `observe()`
+        carries the difference through as `Observed.degraded`.
+      - If the issue list, either PR list, the worktree list, the Orca repo id or the core
+        document could not be read, the tick names what it could not see and reconciles
+        NOTHING: spawning, nudging, escalating, merging and closing are all decisions about
+        state, and this tick did not observe that state. A run of degraded ticks pages the
+        human once (`degraded_ticks_before_page`).
     Issues
       - Gate: no issue is dispatched while `docs/CORE_DOCUMENT.md` on `dev` still carries
         the EMPTY marker. The PO & Analyst's onboarding PR flows through the PR pipeline
@@ -72,8 +81,9 @@ SUBCOMMANDS
 
 STATE
     `.orca/dispatcher/state.json` holds only de-duplication memory (which nudge, comment
-    or spawn already happened, cycle counts). Truth lives in GitHub and Orca; deleting the
-    state file costs at most a duplicate comment, never a lost issue.
+    or spawn already happened, cycle counts, the current run of degraded ticks). Truth
+    lives in GitHub and Orca; deleting the state file costs at most a duplicate comment,
+    never a lost issue.
 """
 
 from __future__ import annotations
@@ -193,31 +203,57 @@ def run(argv: list[str], timeout: int = SUBPROCESS_TIMEOUT) -> tuple[bool, str, 
     return True, proc.stdout, proc.stderr
 
 
+class _ReadFailed:
+    """The value a read returns when the read did not happen.
+
+    Deliberately falsy, so every caller that only ever wanted "nothing usable" keeps working
+    with `or []`; a distinct object, so a caller that cares can ask `is FAILED`. Returning
+    plain `None` for both a failed read and an empty answer is what let three hours of
+    timing-out `gh` calls look like a drained pipeline.
+    """
+
+    __slots__ = ()
+
+    def __bool__(self) -> bool:
+        return False
+
+    def __repr__(self) -> str:
+        return "FAILED"
+
+
+FAILED = _ReadFailed()
+
+
 def gh_json(args: list[str]) -> Any:
+    """Parsed JSON from `gh`; `None` for an empty answer, `FAILED` if the read failed."""
     ok, out, _ = run(["gh", *args])
-    if not ok or not out.strip():
+    if not ok:
+        return FAILED
+    if not out.strip():
         return None
     try:
         return json.loads(out)
     except json.JSONDecodeError as exc:
         log.warning("gh returned bad JSON: %s", exc)
-        return None
+        return FAILED
 
 
-def orca_json(args: list[str]) -> Optional[dict[str, Any]]:
-    """Run an orca command with --json; return the `result` dict or None."""
+def orca_json(args: list[str]) -> Any:
+    """The `result` of an orca command; `None` if it carried none, `FAILED` if the call did
+    not answer (binary missing, timeout, Orca not running, `ok: false`)."""
     ok, out, err = run(["orca", *args, "--json"])
     if not out.strip():
         if not ok:
             log.debug("orca %s: %s", " ".join(args[:3]), err.strip()[:200])
+            return FAILED
         return None
     try:
         payload = json.loads(out)
     except json.JSONDecodeError:
-        return None
+        return FAILED
     if not payload.get("ok", False):
         log.debug("orca %s -> %s", " ".join(args[:3]), payload.get("error"))
-        return None
+        return FAILED
     return payload.get("result") or {}
 
 
@@ -287,6 +323,7 @@ def load_config() -> dict[str, Any]:
     d.setdefault("idle_minutes_before_nudge", 15)
     d.setdefault("idle_minutes_after_nudge", 15)
     d.setdefault("cleanup_worktrees_on_merge", True)
+    d.setdefault("degraded_ticks_before_page", 3)
     d.setdefault("docs_only", {"prefixes": ["docs/"], "suffixes": [".md", ".txt"]})
     d.setdefault("notify", {})
     g = cfg.setdefault("gates", {}).setdefault("core_document", {})
@@ -305,6 +342,7 @@ class State:
     notified: dict[str, int] = field(default_factory=dict)   # "issue:5" / "pr:22" -> ms
     closed_issues: list[int] = field(default_factory=list)  # issues we closed (dedupe)
     backlog: dict[str, Any] = field(default_factory=dict)   # audit epoch / timers (dedupe)
+    observation: dict[str, Any] = field(default_factory=dict)  # current run of degraded ticks
 
     @classmethod
     def load(cls) -> "State":
@@ -318,7 +356,7 @@ class State:
         st = cls(
             issues=raw.get("issues", {}), prs=raw.get("prs", {}),
             notified=raw.get("notified", {}), closed_issues=raw.get("closed_issues", []),
-            backlog=raw.get("backlog", {}),
+            backlog=raw.get("backlog", {}), observation=raw.get("observation", {}),
         )
         # Migrate v1 layout (dispatched{} + prs{stage}) so in-flight work is not redone.
         for num, old in (raw.get("dispatched") or {}).items():
@@ -345,7 +383,7 @@ class State:
         tmp.write_text(json.dumps({
             "issues": self.issues, "prs": self.prs,
             "notified": self.notified, "closed_issues": self.closed_issues,
-            "backlog": self.backlog,
+            "backlog": self.backlog, "observation": self.observation,
         }, indent=2), encoding="utf-8")
         tmp.replace(STATE_FILE)
 
@@ -439,14 +477,25 @@ class Observed:
     gate_reason: str
     achieved: bool             # core document on dev carries the achieved marker
     repo_id: Optional[str]
+    degraded: list[str]        # reads that failed this tick; empty means fully observed
 
 
 def observe(cfg: dict[str, Any]) -> Observed:
+    """Read GitHub and Orca. Reads that failed are named in `Observed.degraded`; the
+    fall-back empties below exist only to keep this function total, because a tick with a
+    non-empty `degraded` reconciles nothing and never acts on them."""
     base = cfg["branches"]["base"]
+    degraded: list[str] = []
+
+    def read(what: str, value: Any, empty: Any) -> Any:
+        if value is FAILED:
+            degraded.append(what)
+            return empty
+        return empty if value is None else value
 
     issues: dict[int, Issue] = {}
-    for raw in gh_json(["issue", "list", "--state", "all", "--limit", "500",
-                        "--json", "number,title,body,labels,url,state"]) or []:
+    for raw in read("issues", gh_json(["issue", "list", "--state", "all", "--limit", "500",
+                                       "--json", "number,title,body,labels,url,state"]), []):
         issues[int(raw["number"])] = Issue(
             number=int(raw["number"]), title=raw.get("title", ""), body=raw.get("body") or "",
             labels={l["name"] for l in raw.get("labels", [])}, url=raw.get("url", ""),
@@ -455,8 +504,9 @@ def observe(cfg: dict[str, Any]) -> Observed:
 
     def _prs(state: str, limit: int) -> list[PR]:
         out: list[PR] = []
-        for raw in gh_json(["pr", "list", "--base", base, "--state", state, "--limit", str(limit),
-                            "--json", "number,title,body,labels,url,headRefName,files,isDraft,state,mergedAt"]) or []:
+        for raw in read(f"{state} PRs", gh_json(
+                ["pr", "list", "--base", base, "--state", state, "--limit", str(limit),
+                 "--json", "number,title,body,labels,url,headRefName,files,isDraft,state,mergedAt"]), []):
             out.append(PR(
                 number=int(raw["number"]), title=raw.get("title", ""), body=raw.get("body") or "",
                 labels={l["name"] for l in raw.get("labels", [])}, url=raw.get("url", ""),
@@ -470,13 +520,15 @@ def observe(cfg: dict[str, Any]) -> Observed:
     merged = _prs("merged", 100)
 
     repo_id: Optional[str] = None
-    res = orca_json(["repo", "show", "--repo", f"path:{REPO_ROOT}"])
+    # Without the repo id the worktree filter below cannot tell this repo's worktrees from
+    # another project's, so a failed lookup degrades the worktree observation too.
+    res = read("Orca repo id", orca_json(["repo", "show", "--repo", f"path:{REPO_ROOT}"]), {})
     if res:
         repo_id = (res.get("repo") or {}).get("id")
 
     worktrees: list[Worktree] = []
-    res = orca_json(["worktree", "list", "--limit", "500"])
-    for raw in (res or {}).get("worktrees", []) or []:
+    res = read("worktrees", orca_json(["worktree", "list", "--limit", "500"]), {})
+    for raw in res.get("worktrees", []) or []:
         if repo_id and raw.get("repoId") != repo_id:
             continue
         if raw.get("isMainWorktree") or raw.get("isArchived"):
@@ -488,25 +540,33 @@ def observe(cfg: dict[str, Any]) -> Observed:
             status=raw.get("workspaceStatus") or "",
         ))
 
-    gate_open, gate_reason, achieved = core_document_gate(cfg)
-    return Observed(issues, prs, merged, worktrees, gate_open, gate_reason, achieved, repo_id)
+    gate_open, gate_reason, achieved, gate_read = core_document_gate(cfg)
+    if not gate_read:
+        degraded.append("core document")
+    return Observed(issues, prs, merged, worktrees, gate_open, gate_reason, achieved, repo_id, degraded)
 
 
-def core_document_gate(cfg: dict[str, Any]) -> tuple[bool, str, bool]:
-    """(gate_open, reason, achieved). Achieved closes the gate: the project is complete
-    until a revision interview sets the status back to AGREED."""
+def core_document_gate(cfg: dict[str, Any]) -> tuple[bool, str, bool, bool]:
+    """(gate_open, reason, achieved, read_ok). Achieved closes the gate: the project is
+    complete until a revision interview sets the status back to AGREED.
+
+    `read_ok` is False when the fetch that refreshes `origin/<base>` failed. `git show`
+    reads the local mirror and keeps answering after a failed fetch, so without this the
+    one input that survives an outage would be the one input that cannot detect it."""
     g = cfg["gates"]["core_document"]
     base = cfg["branches"]["base"]
-    run(["git", "-C", str(REPO_ROOT), "fetch", "-q", "origin", base], timeout=60)
+    fetched, _, _ = run(["git", "-C", str(REPO_ROOT), "fetch", "-q", "origin", base], timeout=60)
+    if not fetched:
+        return False, f"could not fetch origin/{base}; core document unread", False, False
     ok, out, _ = run(["git", "-C", str(REPO_ROOT), "show", f"origin/{base}:{g['path']}"])
     if not ok:
-        return False, f"{g['path']} not found on origin/{base}", False
+        return False, f"{g['path']} not found on origin/{base}", False, True
     if g["empty_marker"] in out:
-        return False, f"{g['path']} on {base} still says '{g['empty_marker']}' -- run the onboarding interview", False
+        return False, f"{g['path']} on {base} still says '{g['empty_marker']}' -- run the onboarding interview", False, True
     if g["achieved_marker"] in out:
         return False, (f"{g['path']} on {base} says '{g['achieved_marker']}' -- project complete; "
-                       "run `dispatch.py onboard` for a revision interview to start a new round"), True
-    return True, "core document present on " + base, False
+                       "run `dispatch.py onboard` for a revision interview to start a new round"), True, True
+    return True, "core document present on " + base, False, True
 
 
 def terminals_for(wt: Worktree) -> list[dict[str, Any]]:
@@ -750,7 +810,7 @@ new features, changes, fixes, feedback from using the result. The human is in th
 
 
 def orca_create_worktree(name: str, base: str, issue_number: Optional[int], agent: str,
-                         prompt: str, activate: bool = False) -> Optional[dict[str, Any]]:
+                         prompt: str, activate: bool = False) -> Any:
     args = ["worktree", "create", "--repo", f"path:{REPO_ROOT}", "--name", name,
             "--base-branch", base, "--agent", agent, "--prompt", prompt]
     if issue_number:
@@ -758,6 +818,17 @@ def orca_create_worktree(name: str, base: str, issue_number: Optional[int], agen
     if activate:
         args += ["--activate"]
     return orca_json(args)
+
+
+def worktree_named(name: str) -> Optional[bool]:
+    """Does Orca hold a worktree called `name`? None when the list could not be read.
+
+    A spawn call that timed out is not a spawn that failed: `orca worktree create` gives up
+    long before Orca does. Re-reading the list is how the dispatcher tells the two apart."""
+    res = orca_json(["worktree", "list", "--limit", "500"])
+    if not isinstance(res, dict):   # FAILED, or no result at all: the list was not read
+        return None
+    return any((wt.get("displayName") or "") == name for wt in res.get("worktrees", []) or [])
 
 
 def orca_spawn_terminal(wt: Worktree, title: str, command: str, text: str) -> Optional[str]:
@@ -1249,26 +1320,71 @@ def reconcile_backlog(obs: Observed, cfg: dict[str, Any], state: State) -> None:
         return
     brief = write_brief("backlog-audit", audit_brief(base, g["achieved_marker"]))
     name = f"{AUDIT_WT_PREFIX}-{epoch}"
+    # Record the attempt BEFORE making it: `orca worktree create` gives up at
+    # SUBPROCESS_TIMEOUT while Orca goes on to create the worktree anyway, so a spawn that
+    # succeeded in the world must not be able to look like a failure in the state file --
+    # that is what guaranteed a duplicate audit on every timeout.
+    b["audit_epoch"] = epoch
+    b["audit_spawned"] = now_ms()
+    b.pop("audit_nudged", None)
+    state.notified.pop("backlog:audit-stalled", None)
+    state.save()
+
     def _spawn(name=name, brief=brief):
         return orca_create_worktree(name, base, None, d["agent"], one_liner(brief))
     res = act(f"pipeline drained -> spawn PO & Analyst backlog audit (epoch {epoch})", _spawn)
-    if DRY_RUN or res:
-        b["audit_epoch"] = epoch
-        b["audit_spawned"] = now_ms()
-        b.pop("audit_nudged", None)
-        state.notified.pop("backlog:audit-stalled", None)
+    if not (DRY_RUN or res) and worktree_named(name) is False:
+        # The call failed and Orca says no such worktree exists: nothing was spawned, so
+        # forget the attempt rather than record an audit that never ran. An unreadable
+        # worktree list leaves the record standing, because it may well have been created.
+        b.pop("audit_epoch", None)
+        b.pop("audit_spawned", None)
         state.save()
-    else:
-        log.warning("backlog audit: orca worktree create failed; will retry next tick")
+        log.warning("backlog audit: orca worktree create failed and no worktree appeared; "
+                    "will retry next tick")
 
 
 # --------------------------------------------------------------------------- tick & loop
+
+
+def refuse_degraded(obs: Observed, cfg: dict[str, Any], state: State) -> None:
+    """Log what could not be read, reconcile nothing, and page the human once if it lasts.
+
+    Spawning, nudging, escalating, merging and closing are all decisions about state; a tick
+    that could not read that state has no business making them. Three hours of total tool
+    failure previously produced only warnings in a log file nobody was watching, so a run of
+    degraded ticks pages -- once, not once per tick."""
+    o = state.observation
+    o["degraded_ticks"] = int(o.get("degraded_ticks", 0)) + 1
+    o.setdefault("degraded_since", now_ms())
+    o["degraded_reads"] = obs.degraded
+    state.save()
+    log.warning("could not read %s; reconciling nothing this tick (%s in a row)",
+                ", ".join(obs.degraded), o["degraded_ticks"])
+    if o["degraded_ticks"] < int(cfg["dispatcher"]["degraded_ticks_before_page"]):
+        return
+    notify_human(cfg, state, "observe:degraded", "the dispatcher cannot see GitHub or Orca",
+                 f"{o['degraded_ticks']} consecutive ticks over {minutes_since(o['degraded_since']):.0f} "
+                 f"minutes could not read: {', '.join(obs.degraded)}.\n"
+                 "Nothing has been dispatched, nudged, escalated, merged or closed since, and nothing "
+                 "will be until one tick observes cleanly.\n"
+                 "Check `gh auth status`, that the Orca desktop app is running, and network reachability.",
+                 "issue", None, None)
 
 
 def tick(cfg: dict[str, Any], state: State) -> None:
     obs = observe(cfg)
     log.debug("observed: %s issues, %s open PRs, %s merged PRs, %s worktrees; gate: %s",
               len(obs.issues), len(obs.prs), len(obs.merged), len(obs.worktrees), obs.gate_reason)
+    if obs.degraded:
+        refuse_degraded(obs, cfg, state)
+        return
+    if state.observation:
+        log.info("observation recovered after %s degraded tick(s)",
+                 state.observation.get("degraded_ticks", 0))
+        state.observation.clear()
+        state.notified.pop("observe:degraded", None)
+        state.save()
     reconcile_merged(obs, cfg, state)
     reconcile_prs(obs, cfg, state)
     reconcile_issues(obs, cfg, state)
@@ -1311,6 +1427,9 @@ def cmd_once(cfg: dict[str, Any], state: State) -> int:
 def cmd_status(cfg: dict[str, Any], state: State) -> int:
     obs = observe(cfg)
     print(f"gate: {'OPEN' if obs.gate_open else 'CLOSED'} -- {obs.gate_reason}")
+    if obs.degraded:
+        print(f"observation: DEGRADED -- could not read {', '.join(obs.degraded)}; "
+              "a tick would reconcile nothing")
     wt_by_issue = {wt.issue_number: wt for wt in obs.worktrees if wt.issue_number}
     pr_by_issue = {pr.issue_number: pr for pr in obs.prs if pr.issue_number}
     print("\nISSUES")
@@ -1404,9 +1523,11 @@ def cmd_doctor(cfg: dict[str, Any], fix: bool) -> int:
     ok(f"{len(wanted) - len(missing)}/{len(wanted)} skills installed") if not missing else \
         bad(f"skills missing: {missing}  (run: bash .orca/setup_skills.sh)")
     print("gate")
-    g_ok, g_why, g_achieved = core_document_gate(cfg)
+    g_ok, g_why, g_achieved, g_read = core_document_gate(cfg)
     if g_achieved:
         ok(g_why)  # complete is not a defect
+    elif not g_read:
+        bad(g_why)  # unread, not closed: a tick would reconcile nothing at all
     else:
         (ok if g_ok else bad)(g_why)
     print("state")
