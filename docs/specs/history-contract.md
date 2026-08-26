@@ -260,6 +260,11 @@ AI provenance (CD §6.3) is a field in the data model, so setting it is a `Set` 
 content, and redo restores both, with no extra machinery. A provenance mark that outlived an undo
 would be a false accusation; content that outlived its mark would be a false promise (CD §9.4).
 
+This is also how obligation **O-19.1** is discharged without §7.3 being weakened. O-19.1 asks for
+two provenance flags "set from the `Delta`", and a Delta cannot name the Function that produced it.
+It does not have to: the generating Function knows what it is and writes the flag itself, in this
+same Delta. See [`ADR-062`](../adrs/ADR-062-provenance-two-flags.md).
+
 ### 7.5 Why this is the whole remedy
 
 The user cannot inspect what the Assistant did (NON-scope 6). Undo is therefore the only recourse,

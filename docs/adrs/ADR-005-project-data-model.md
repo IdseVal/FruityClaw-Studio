@@ -5,6 +5,11 @@
 - **Issue:** #5 — Design the Project data model
 - **Decided by:** Architect agent; requires project-owner ratification, see *Open items*
 - **Supersedes:** nothing
+- **Superseded in part by:** [`ADR-062`](ADR-062-provenance-two-flags.md), 2026-08-26 — Provenance
+  only. Contract §4 now has three authorship states, so *Worked example 2* below reads
+  `Generated { source, at }` where the model now says
+  `{ authorship: GenerativeModel, source, at }`. Every case in that example still holds; only the
+  shape of the value changed. Nothing else in this ADR is affected.
 - **Contract:** [`docs/specs/project-data-model.md`](../specs/project-data-model.md)
 
 This ADR records *why*. The spec records *what*, and is normative. Where they disagree, the spec

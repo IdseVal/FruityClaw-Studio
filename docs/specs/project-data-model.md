@@ -2,6 +2,9 @@
 
 - **Status:** Frozen contract. Changes require a superseding ADR.
 - **Authority:** [`ADR-005`](../adrs/ADR-005-project-data-model.md) decides; this document states the contract.
+- **Amended by:** [`ADR-062`](../adrs/ADR-062-provenance-two-flags.md) — §4 Provenance only (2026-08-26,
+  issue #62): three authorship states in place of two, so the §6.3 mark and the §6.2 licence caveat
+  stop being the same flag. Rules P1 and P7, and invariant I11.
 - **Derived from:** `docs/CORE_DOCUMENT.md` §3.7, §3.8, §3.9, §5, §6.3, §8.1, §9.
 - **Issue:** #5
 
@@ -275,15 +278,30 @@ is out.
 
 ## 4. Provenance
 
+Amended by [`ADR-062`](../adrs/ADR-062-provenance-two-flags.md). The core document asks two
+questions about AI content, and they have different answers over a nested set: §6.3 marks anything
+the AI authored, §6.2's licence caveat applies only to what a generative model produced.
+
 ```
-Provenance =
-  | Human
-  | Generated { source: string, at: timestamp }
+Provenance = { authorship: Authorship, source: string, at: timestamp }
+
+Authorship =
+  | Human            -- no mark, no caveat
+  | Assistant        -- §6.3 mark; the user directed it, so no caveat
+  | GenerativeModel  -- §6.3 mark and the §6.2 licence caveat
 ```
 
 `source` names the model or agent that produced the content, because §6.2's warning and §6.4's
-handpicked-model list both depend on *what* generated it, not merely *that* something did. The
-boolean §6.3 asks for is `provenance != Human` — derived, never stored separately.
+handpicked-model list both depend on *what* generated it, not merely *that* something did. `at` is a
+timestamp. Both are empty when `authorship = Human`.
+
+The two flags obligation **O-19.1** names are **derived predicates**, never stored fields — the same
+treatment §6.3's boolean already had:
+
+| O-19.1 flag | Derivation | What the user sees |
+|---|---|---|
+| `ai_origin` | `authorship != Human` | The §6.3 mark: the corner badge, and the provenance line when the item is opened |
+| `generative_output` | `authorship == GenerativeModel` | The §6.2 licence caveat, appended to that line |
 
 Carried by **`Sample` and `Pattern` only** — exactly the two entities §6.3 names. Not by Project,
 not by Part, not by Event.
@@ -292,12 +310,13 @@ not by Part, not by Event.
 
 | # | Rule |
 |---|---|
-| P1 | Provenance is set when content is created, and when an Assistant mutation changes that content. |
+| P1 | Provenance is set when content is created, and when an Assistant mutation materially changes that content. `generate_pattern` and `generate_sample` set `GenerativeModel`; every other Function acting under an `Assistant` Delta sets `Assistant`. The Function sets it, inside the same Delta as the content it marks (history contract §7.4) — the Delta never names which Function ran (§7.3, NON-scope 6). |
 | P2 | Provenance is **never silently cleared**. Human editing of generated content does not launder it (§9.4). Enforced by omission: an ordinary edit's Delta simply contains no Edit to the `provenance` field. |
-| P3 | Provenance **propagates on copy**. Duplicating a `Generated` Pattern yields a `Generated` Pattern. |
+| P3 | Provenance **propagates on copy**. Duplicating a Pattern yields a Pattern with the same `authorship`, `source` and `at`. Copying does not launder. |
 | P4 | Provenance is **data in the Delta** like any other field, so `undo` restores it. Undoing an AI rework returns the Pattern to `Human`, which is correct — the generated content is gone with it. |
 | P5 | Whether a Project contains AI-generated content is **computed** by walking the reference graph. Never stored, so it cannot go stale, and a mutation that would otherwise touch one thing is never forced to touch two. |
-| P6 | Provenance is per-entity and does not spread across references. A `Human` Pattern whose Part targets an Instrument playing a `Generated` Sample stays `Human`; the Sample stays `Generated`; the interface shows both marks. |
+| P6 | Provenance is per-entity and does not spread across references. A `Human` Pattern whose Part targets an Instrument playing a generated Sample stays `Human`; the Sample keeps its authorship; the interface shows both marks. |
+| P7 | The two flags are **nested, not independent**: `generative_output` implies `ai_origin`. One field with three states makes the fourth combination unrepresentable rather than an invariant each call site has to remember. |
 
 ---
 
@@ -377,6 +396,7 @@ These are the contract. Each is mechanically checkable and should have a test.
 | I8 | No dangling references. Every `Id` reference resolves to a live entity in the same Project. |
 | I9 | All musical time is integer `Ticks` at PPQ 960; pitch and velocity are integers 0–127. |
 | I10 | No type name, field name, enum value, `Id` prefix, namespace or format constant contains the product name or any part of it (§8.1), and no retired §5.1 term appears in any identifier. |
+| I11 | The §6.2 licence caveat reaches the user on `generative_output` entities and on no others, and is worded in exactly one place in the source. The §6.3 mark reaches the user on every `ai_origin` entity. (ADR-062) |
 
 I10 is enforced by a lint over **identifiers** — type names, field names, enum values, namespaces
 and format constants, in source and in the schema tables above — failing on `fruity`, `claw`,
