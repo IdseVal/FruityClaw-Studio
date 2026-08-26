@@ -360,7 +360,7 @@ void ArrangementView::paint_placement(QPainter& painter, const core::Pattern* pa
 
     // Section 6.3: a generated Pattern is marked wherever it appears, so
     // the mark rides on every Placement of it, in the bottom-right corner.
-    if (pattern && !pattern->provenance.is_human() && rect.width() >= 20) {
+    if (pattern && pattern->provenance.ai_origin() && rect.width() >= 20) {
         paint_provenance_mark(painter, QRect(rect.right() - 15, rect.bottom() - 12, 14, 10));
     }
 }

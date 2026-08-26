@@ -21,21 +21,47 @@
 namespace core {
 
 // ---------------------------------------------------------------------------
-// Provenance (contract section 4)
+// Provenance (contract section 4, ADR-062)
+
+// Who authored an entity's content. Three states rather than two independent
+// booleans, because the two questions the core document asks have different
+// answers over a nested set: section 6.3 marks anything AI-authored, section
+// 6.2's licence caveat applies only to generative-model output, and the
+// caveat's set is strictly inside the mark's. One field makes
+// `generative_output && !ai_origin` unrepresentable instead of an invariant
+// someone has to remember at each call site.
+enum class Authorship {
+    Human,            // no mark, no caveat
+    Assistant,        // section 6.3 mark; the user directed it, so no caveat
+    GenerativeModel,  // section 6.3 mark and the section 6.2 licence caveat
+};
 
 struct Provenance {
-    // Human by default. When generated, `generated_by` names the model or agent
-    // and `generated_at` is a unix timestamp in seconds; the section 6.3 boolean
-    // is `!is_human()`, derived and never stored separately.
-    std::string generated_by;
-    std::int64_t generated_at = 0;
+    // Human by default. Otherwise `source` names the model or agent that
+    // produced the content and `at` is a unix timestamp in seconds. The two
+    // flags obligation O-19.1 names are the derived predicates below; like the
+    // section 6.3 boolean before them they are computed, never stored
+    // separately (contract section 4, rules P5 and P7).
+    Authorship authorship = Authorship::Human;
+    std::string source;
+    std::int64_t at = 0;
 
-    bool is_human() const { return generated_by.empty(); }
+    // O-19.1, section 6.3 — the visual mark, on anything the AI authored.
+    bool ai_origin() const { return authorship != Authorship::Human; }
+    // O-19.1, section 6.2 — the licence caveat, on generative output only.
+    bool generative_output() const { return authorship == Authorship::GenerativeModel; }
+
     bool operator==(const Provenance&) const = default;
 
     static Provenance human() { return {}; }
-    static Provenance generated(std::string source, std::int64_t at) {
-        return Provenance{std::move(source), at};
+    // Set by any Function acting under an `Origin::Assistant` Delta that
+    // creates or materially rewrites the entity.
+    static Provenance assistant(std::string source, std::int64_t at) {
+        return Provenance{Authorship::Assistant, std::move(source), at};
+    }
+    // Set by `generate_pattern` and `generate_sample`, and by nothing else.
+    static Provenance generative_model(std::string source, std::int64_t at) {
+        return Provenance{Authorship::GenerativeModel, std::move(source), at};
     }
 };
 

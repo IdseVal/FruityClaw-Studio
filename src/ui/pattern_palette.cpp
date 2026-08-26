@@ -51,7 +51,7 @@ void PatternPalette::reload() {
         const core::Pattern& pattern = patterns[i];
         QColor colour = pattern.colour ? theme::from_colour(*pattern.colour)
                                        : theme::hue(static_cast<int>(i));
-        bool marked = !pattern.provenance.is_human();
+        bool marked = pattern.provenance.ai_origin();
         auto* item = new QListWidgetItem(QIcon(swatch(colour, marked)),
                                          QString::fromStdString(pattern.name), this);
         // The mark must reach a screen reader as well as the eye.

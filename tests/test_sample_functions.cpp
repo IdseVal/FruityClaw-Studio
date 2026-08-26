@@ -97,7 +97,7 @@ TEST_CASE("add_sample appends one Human Sample over the audio and undo removes i
     CHECK(samples.back().name == "Take 1");
     CHECK(samples.back().source == take);  // shared, not copied
     // A recording is the user's own work: never marked AI-generated.
-    CHECK(samples.back().provenance.is_human());
+    CHECK_FALSE(samples.back().provenance.ai_origin());
     // Nothing else moved: no Instrument, no Pattern lane.
     CHECK(history.read().instruments == original.instruments);
     CHECK(history.read().patterns == original.patterns);

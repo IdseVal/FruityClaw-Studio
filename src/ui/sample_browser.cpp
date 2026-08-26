@@ -62,7 +62,7 @@ QPixmap thumbnail(const core::Sample& sample, const QColor& colour) {
         QPixmap pixmap;
     };
     static std::unordered_map<core::Id, Cached> cache;
-    bool marked = !sample.provenance.is_human();
+    bool marked = sample.provenance.ai_origin();
     auto cached = cache.find(sample.id);
     if (cached != cache.end() && cached->second.marked == marked) return cached->second.pixmap;
 
@@ -99,7 +99,7 @@ void show_details(const core::Sample& sample, const QColor& colour, QWidget* par
     {
         QPainter painter(&picture);
         if (sample.source) paint_waveform(painter, *sample.source, picture.rect().adjusted(4, 4, -4, -4), colour);
-        if (!sample.provenance.is_human()) paint_provenance_mark(painter, QRect(300, 56, 16, 12));
+        if (sample.provenance.ai_origin()) paint_provenance_mark(painter, QRect(300, 56, 16, 12));
     }
     auto* waveform = new QLabel(dialog);
     waveform->setPixmap(picture);
@@ -119,7 +119,7 @@ void show_details(const core::Sample& sample, const QColor& colour, QWidget* par
     auto* provenance = new QLabel(provenance_text(sample.provenance), dialog);
     provenance->setWordWrap(true);
     provenance->setObjectName("provenance");
-    if (!sample.provenance.is_human()) {
+    if (sample.provenance.ai_origin()) {
         provenance->setStyleSheet(QString("color: %1;").arg(theme::kAccent.name()));
     }
 
@@ -229,7 +229,7 @@ void SampleBrowser::reload() {
         item->setData(Qt::UserRole, static_cast<int>(i));
         // The mark must reach a screen reader as well as the eye.
         item->setData(Qt::AccessibleDescriptionRole,
-                      sample.provenance.is_human() ? QString() : kProvenanceMarkLabel);
+                      sample.provenance.ai_origin() ? kProvenanceMarkLabel : QString());
         item->setToolTip(provenance_text(sample.provenance));
         if (keep && *keep == sample.id) {
             list_->setCurrentItem(item);
