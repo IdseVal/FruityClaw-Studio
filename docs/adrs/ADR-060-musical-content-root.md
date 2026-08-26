@@ -24,8 +24,9 @@ work where it belongs:
 > frame — and **nothing else**. View state, file path and save metadata must sit outside it. §1
 > depends on this being a real structural split, not a naming convention.
 
-Issue #5 closed and ADR-005 merged without discharging it. On `dev` at `95f01a8`, `MusicalContent`
-appeared eleven times in `docs/` and zero times in `src/`. Every Function took the whole document:
+Issue #5 closed and ADR-005 merged without discharging it. On `dev` at `95f01a8` — where this
+audit was taken, and still so at `b05dfdb`, where this change lands — `MusicalContent` was a word
+`docs/` used fifteen times and `src/` used never. Every Function took the whole document:
 `create_track(const Project&, …)` and ten more like it.
 
 **The rule held anyway — by coincidence.** `core::Project` happened to contain only musical
@@ -186,6 +187,14 @@ fails. That is the defect this ADR closes.
   `content.` in the body, or `project.musical.` / `project.meta.` at a whole-document caller. No
   logic moves. Whoever rebases second reruns `ctest --preset dev-headless`; a missed site is a
   compile error, not a silent behaviour change.
+
+  This is not a prediction: it has been done once already. #14's recording path merged while this
+  decision was being written, bringing a twelfth Function (`add_sample`) and a caller in
+  `RecordBar`. Carrying the split over it was a signature, two field paths and their tests — the
+  size this bullet claims — and `add_sample` joins the census in `tests/test_reach_rule.cpp` like
+  the rest. A Function merged *after* this ADR and left on `const Project&` would not compile,
+  because there is no such overload; one written in a new `*_functions.h` fails
+  `reach_rule_lint` without anyone adding a rule for it.
 - **The obligation is recorded as discharged** in function-surface §8, so the next audit does not
   refile this issue.
 

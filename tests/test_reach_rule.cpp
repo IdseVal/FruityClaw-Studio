@@ -55,6 +55,7 @@ static_assert(takes_only_musical_content<decltype(add_placement)>);
 static_assert(takes_only_musical_content<decltype(move_placement)>);
 static_assert(takes_only_musical_content<decltype(resize_placement)>);
 static_assert(takes_only_musical_content<decltype(remove_placement)>);
+static_assert(takes_only_musical_content<decltype(add_sample)>);
 static_assert(takes_only_musical_content<decltype(create_instrument)>);
 static_assert(takes_only_musical_content<decltype(add_part)>);
 
