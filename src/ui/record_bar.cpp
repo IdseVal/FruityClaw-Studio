@@ -141,7 +141,7 @@ void RecordBar::finish_take() {
     }
 
     std::string name = next_take_name();
-    auto added = core::functions::add_sample(history_.read(), name, take);
+    auto added = core::functions::add_sample(history_.read().musical, name, take);
     if (!added.ok()) {
         emit hint_changed(QString::fromStdString(added.error));
         return;
@@ -159,10 +159,10 @@ void RecordBar::finish_take() {
 }
 
 std::string RecordBar::next_take_name() const {
-    const core::Project& project = history_.read();
+    const core::MusicalContent& content = history_.read().musical;
     for (int n = 1;; ++n) {
         std::string candidate = "Take " + std::to_string(n);
-        bool taken = std::any_of(project.samples.items.begin(), project.samples.items.end(),
+        bool taken = std::any_of(content.samples.items.begin(), content.samples.items.end(),
                                  [&](const core::Sample& s) { return s.name == candidate; });
         if (!taken) return candidate;
     }

@@ -234,7 +234,7 @@ int accent_pixels(const QImage& image) {
 
 // The fixture's melody Pattern rewritten as AI-generated (section 6.3).
 Project with_generated_melody(Project project, Id melody) {
-    project.patterns.find(melody)->provenance = Provenance::generated("test-model", 1700000000);
+    project.musical.patterns.find(melody)->provenance = Provenance::generated("test-model", 1700000000);
     return project;
 }
 
@@ -578,7 +578,8 @@ TEST_CASE("a Placement of an AI-generated Pattern carries the mark in its corner
     // so the playhead at bar 1 and the block edges never share a pixel.
     for (auto [track, pattern] : {std::pair{ids.track_a, ids.melody_pattern},
                                   std::pair{ids.track_b, ids.drum_pattern}}) {
-        auto placed = add_placement(history.read(), ids.arrangement, track, pattern, 4 * kPpq);
+        auto placed = add_placement(history.read().musical, ids.arrangement, track, pattern,
+                                    4 * kPpq);
         REQUIRE(placed.ok());
         REQUIRE(history.apply(std::move(placed->delta)) == ApplyResult::Applied);
     }
@@ -616,16 +617,18 @@ TEST_CASE("a Placement too narrow for the mark is left unmarked rather than over
 
     // A generated melody at bar 2, trimmed to half a beat: 14 px at default
     // zoom, under the 20 px floor the view needs to fit the 14 px logo.
-    auto placed = add_placement(history.read(), ids.arrangement, ids.track_a,
+    auto placed = add_placement(history.read().musical, ids.arrangement, ids.track_a,
                                 ids.melody_pattern, 4 * kPpq);
     REQUIRE(placed.ok());
     REQUIRE(history.apply(std::move(placed->delta)) == ApplyResult::Applied);
-    auto trimmed = resize_placement(history.read(), ids.arrangement, ids.track_a,
+    auto trimmed = resize_placement(history.read().musical, ids.arrangement, ids.track_a,
                                     placed->id, kPpq / 2);
     REQUIRE(trimmed.ok());
     REQUIRE(history.apply(std::move(*trimmed)) == ApplyResult::Applied);
-    REQUIRE(history.read().arrangements.find(ids.arrangement)->tracks[0].placements[0].length ==
-            kPpq / 2);
+    REQUIRE(history.read().musical.arrangements.find(ids.arrangement)
+                ->tracks[0]
+                .placements[0]
+                .length == kPpq / 2);
 
     QImage frame = view.grab().toImage();
     // The whole of Track 1 from bar 2 to bar 3: no accent pixel anywhere, so the
@@ -1030,10 +1033,10 @@ TEST_CASE("switching a Function off removes it from the file; the user keeps the
     // rename goes through the same door as before, unaffected.
     auto ids = make_fixture();
     ProjectHistory history(std::move(ids.project));
-    auto renamed = rename_track(history.read(), ids.arrangement, ids.track_a, "Bass");
+    auto renamed = rename_track(history.read().musical, ids.arrangement, ids.track_a, "Bass");
     REQUIRE(renamed.ok());
     CHECK(history.apply(*renamed) == ApplyResult::Applied);
-    CHECK(history.read().arrangements.items.front().tracks[0].name == "Bass");
+    CHECK(history.read().musical.arrangements.items.front().tracks[0].name == "Bass");
 
     f.row("rename_track")->click();
     CHECK(f.offers("rename_track"));
@@ -1254,7 +1257,8 @@ TEST_CASE("record then stop adds the take as one Human Sample, undoable") {
     QTest::mouseClick(f.record, Qt::LeftButton);
     CHECK(f.recorder.recording);
     CHECK(f.record->text() == "Stop Rec");
-    CHECK(f.history.read().samples.items.size() == before.samples.items.size());
+    CHECK(f.history.read().musical.samples.items.size() ==
+          before.musical.samples.items.size());
     QLabel* length = nullptr;
     for (QLabel* label : f.bar.findChildren<QLabel*>())
         if (label->text() == "0:00.1") length = label;
@@ -1263,8 +1267,8 @@ TEST_CASE("record then stop adds the take as one Human Sample, undoable") {
     QTest::mouseClick(f.record, Qt::LeftButton);
     CHECK_FALSE(f.recorder.recording);
     CHECK(f.record->text() == "Record");
-    const auto& samples = f.history.read().samples.items;
-    REQUIRE(samples.size() == before.samples.items.size() + 1);
+    const auto& samples = f.history.read().musical.samples.items;
+    REQUIRE(samples.size() == before.musical.samples.items.size() + 1);
     CHECK(samples.back().name == "Take 1");
     CHECK(samples.back().source == f.recorder.take);
     CHECK(samples.back().provenance.is_human());
@@ -1274,7 +1278,7 @@ TEST_CASE("record then stop adds the take as one Human Sample, undoable") {
     // A second take gets the next free name.
     QTest::mouseClick(f.record, Qt::LeftButton);
     QTest::mouseClick(f.record, Qt::LeftButton);
-    CHECK(f.history.read().samples.items.back().name == "Take 2");
+    CHECK(f.history.read().musical.samples.items.back().name == "Take 2");
 
     REQUIRE(f.history.undo());
     REQUIRE(f.history.undo());
@@ -1288,7 +1292,7 @@ TEST_CASE("recording with no input chosen is refused with a hint") {
     CHECK_FALSE(f.recorder.start_recording());
     QTest::keyClick(&f.bar, Qt::Key_R);
     CHECK_FALSE(f.recorder.recording);
-    CHECK(f.history.read().samples.items.size() == 2);
+    CHECK(f.history.read().musical.samples.items.size() == 2);
 }
 
 // ---------------------------------------------------------------------------
