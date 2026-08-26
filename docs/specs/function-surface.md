@@ -4,6 +4,7 @@
 - **Date:** 2026-08-23
 - **Issue:** #6
 - **Decision record:** [ADR-006](../adrs/ADR-006-function-surface-and-function-file.md)
+- **Amended by:** [ADR-060](../adrs/ADR-060-musical-content-root.md) — §1's picture matches the data model, and obligation O-5.1 is discharged.
 - **Derived from:** `docs/CORE_DOCUMENT.md` §3.8, §3.10, §4, §5, §8.4, §9
 
 This spec defines what the Assistant may do, the shape of the instruments it does it with, and
@@ -26,25 +27,42 @@ Everything else is out of reach: Studio settings, provider credentials, the Func
 view state (zoom, scroll, window layout), the Project's own file path, and the filesystem.
 
 **This is enforced by construction, not by a check.** Every Function is handed exactly one object,
-`MusicalContent`, a read-only view rooted at the musical subtree of the open Project. Nothing else
+`MusicalContent`, a read-only view of the musical content of the open Project. Nothing else
 is in scope. There is no reference from `MusicalContent` to settings, to credentials, to the toggle
 store, or to a filesystem path — so there is nothing for a Function to reach *through*. §9.1 is not
 a rule the Assistant is asked to respect; it is a shape of the type graph.
 
 ```
 Project
-├── musical/            ← MusicalContent: the ONLY thing a Function ever receives
-│   ├── patterns/           note and step events
-│   ├── channels/           instrument, sample reference, gain, pan, mute
-│   ├── arrangement/        tracks, clips
-│   ├── effect_chains/      the six stock Effects (§3.4) and their parameters
-│   └── frame/              tempo, time signature, key
-├── view/               ← unreachable: zoom, scroll, selection, panel layout
-└── meta/               ← unreachable: file path, save state, provenance index
+├── musical             ← MusicalContent: the ONLY thing a Function ever receives
+│   ├── patterns            note and step events, in Parts
+│   ├── instruments         sample reference, gain, pan, mode  (see note)
+│   ├── samples             the Project's Sample library
+│   ├── arrangements        tracks, placements
+│   ├── master_chain        the six stock Effects (§3.4) and their parameters
+│   └── frame               tempo, time signature
+└── meta                ← unreachable: identity, format version, title, and the
+                          Project's file path and save metadata when they land
 
+view state              ← not in the Project at all: zoom, scroll, selection and
+                          panel layout live in the widgets that own them
 StudioSettings          ← unreachable: audio device, provider keys, model choice,
                           generation enablement, and the Function toggles themselves
 ```
+
+Three corrections this diagram carries, all recorded in ADR-060, none of them a change of intent:
+
+- The split is real in `src/core/entities.h` — `Project { meta, musical }` — and the write side is
+  as narrow as the read side: a `Delta` is typed on `MusicalContent`, so no change a Function
+  computes can address anything outside it either.
+- **View state is not in the Project.** The data model (project-data-model §3.11) never put it
+  there, which is stronger than putting it in an unreachable subtree.
+- `meta` holds no provenance index. Whether a Project contains AI content is computed by walking
+  the reference graph and never stored (project-data-model P5).
+
+The `instruments` line names the data model's term. Whether the catalogue's **Channel** is that
+Instrument, a Pattern's **Part**, or a new entity is open item 1 and issue #61; it changes what is
+inside `MusicalContent`, not the boundary this section draws.
 
 **The settings valve is one-way.** Settings flow *into* the Function file — the toggles decide what
 is built (§4). Settings never flow *to* a Function. The switchboard reads its own state; no Function
@@ -310,7 +328,7 @@ might plausibly have been included — that is where the information is.
 
 | # | Invariant |
 |---|---|
-| I1 | Cannot reach Studio settings, provider credentials, the toggle store, view state, the Project's file path, or the filesystem. No reference exists in `MusicalContent` (§1). |
+| I1 | Cannot reach Studio settings, provider credentials, the toggle store, view state, the Project's file path, or the filesystem. No reference exists in `MusicalContent` (§1) — asserted at compile time and by `tests/reach_rule_lint.py` (ADR-060). |
 | I2 | Returns a `Delta`; never writes. Every effect is undoable (§9.7). |
 | I3 | Touches exactly the entities its resolved Selectors name — and no sibling, parent or child not named. |
 | I4 | Never creates or deletes an entity, unless creation or deletion is its stated single effect. |
@@ -562,7 +580,7 @@ against them.
 
 | ID | Issue | Obligation |
 |---|---|---|
-| O-5.1 | #5 Project data model | Expose a `MusicalContent` root containing patterns, channels, arrangement, effect chains and frame — and **nothing else**. View state, file path and save metadata must sit outside it. §1 depends on this being a real structural split, not a naming convention |
+| O-5.1 | #5 Project data model | Expose a `MusicalContent` root containing patterns, channels, arrangement, effect chains and frame — and **nothing else**. View state, file path and save metadata must sit outside it. §1 depends on this being a real structural split, not a naming convention. **Discharged** by [ADR-060](../adrs/ADR-060-musical-content-root.md) (issue #60): `core::MusicalContent` and `core::ProjectMeta` exist, every Function and every `Delta` is typed on the former, and three CI checks hold the line |
 | O-5.2 | #5 | Every addressable musical object needs a stable identity that survives rename. Selectors resolve *to* these; they are never sent |
 | O-5.3 | #5 | Model a Project key, or say there is none — `set_project_key` is dropped if not |
 | O-7.1 | #7 delta history | Accept `Delta` as the unit of change and be the only writer. Record `origin: Human \| Assistant{function}` |

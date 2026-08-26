@@ -2,6 +2,7 @@
 
 - **Status:** Frozen contract. Changes require a superseding ADR.
 - **Authority:** [`ADR-005`](../adrs/ADR-005-project-data-model.md) decides; this document states the contract.
+- **Amended by:** [`ADR-060`](../adrs/ADR-060-musical-content-root.md) — §3.1 splits into `ProjectMeta` and `MusicalContent`; §5.1 and §6 state which surface `apply` is the door to; I11 is added.
 - **Derived from:** `docs/CORE_DOCUMENT.md` §3.7, §3.8, §3.9, §5, §6.3, §8.1, §9.
 - **Issue:** #5
 
@@ -106,18 +107,48 @@ name, or enum value.
 
 ### 3.1 Project
 
+A Project has two halves, and which half a thing is in decides whether a **Function** can reach it
+(function-surface §1, ADR-060). The split is structural: `MusicalContent` holds no reference to
+`ProjectMeta`, so there is nothing for a Function to reach *through*.
+
+| Field | Type | Notes |
+|---|---|---|
+| `meta` | `ProjectMeta` (§3.1.1) | The document, as distinct from what it sounds like. **Unreachable from a Function.** |
+| `musical` | `MusicalContent` (§3.1.2) | The musical content. **The only object a Function ever receives.** |
+
+#### 3.1.1 ProjectMeta
+
 | Field | Type | Notes |
 |---|---|---|
 | `id` | `Id` | |
 | `format_version` | integer | Numeric only. Never a branded string (§8.1). |
 | `title` | string | The **user's** title for their work. Unrelated to the product name. |
-| `tempo` | float BPM | Constant for the whole Project in the MVP. Tempo automation is out of scope (§7.3). |
-| `time_signature` | (integer, integer) | Constant for the whole Project in the MVP. |
+
+This is where non-musical document state goes: the Project's file path and save metadata among it,
+if the serialisation issue (§7.1) wants them in the document at all. Nothing added here becomes
+visible to a Function and no Function signature changes when it arrives — that is the whole point
+of the split, and `tests/test_reach_rule.cpp` is the proof.
+
+`ProjectMeta` is **not** delta-managed (§5.1). It is written when a document is created or loaded.
+
+#### 3.1.2 MusicalContent
+
+| Field | Type | Notes |
+|---|---|---|
+| `tempo` | float BPM | The frame. Constant for the whole Project in the MVP; tempo automation is out of scope (§7.3). |
+| `time_signature` | (integer, integer) | The frame. Constant for the whole Project in the MVP. |
 | `samples` | ordered map `Id → Sample` | Owned. |
 | `instruments` | ordered map `Id → Instrument` | Owned. |
 | `patterns` | ordered map `Id → Pattern` | Owned. |
 | `arrangements` | ordered map `Id → Arrangement` | Owned. Exactly one entry in the MVP. |
 | `master_chain` | list of `Effect` | Owned. Ordered, may be empty. |
+
+**Membership test.** A field belongs in `MusicalContent` **iff changing it changes what the
+renderer produces** — `engine::bake` takes exactly this type and nothing else. Tempo passes; a file
+path does not. The test is mechanical so that the boundary does not drift on taste.
+
+Adding a field here widens what the Assistant can reach, and is a deliberate, reviewable act: the
+census in `tests/test_reach_rule.cpp` stops compiling until whoever added it names it there.
 
 `arrangements` is a map holding one entry rather than a single field, so that multiple
 Arrangements later become an addition rather than a contract change.
@@ -262,7 +293,9 @@ and `Project` (master). The Mixer, when it arrives, becomes a third holder of th
 
 ### 3.11 What is deliberately not in the model
 
-- **Transient view state** — zoom, scroll, selection, panel sizes, the currently open editor.
+- **Transient view state** — zoom, scroll, selection, panel sizes, the currently open editor. Not
+  in `MusicalContent`, and not in `ProjectMeta` either: it is not in the Project at all. It lives in
+  the widgets that own it.
 - **Settings of any kind** (§9.1).
 - **Derived values** — the Project's AI-content rollup, waveform peaks, per-Pattern occupancy,
   events sorted by start, the `Id` lookup index. All computed, never stored.
@@ -314,8 +347,18 @@ ProjectHistory
 ```
 
 **Entities expose no public mutators.** `ProjectHistory` owns the Project and `apply` is the only
-door. Four operations hide identity allocation, referential-integrity checking, atomicity, delta
-inversion and redo-tail truncation.
+door to its **musical content**. Four operations hide identity allocation, referential-integrity
+checking, atomicity, delta inversion and redo-tail truncation.
+
+A `Delta` is typed on `MusicalContent`, not on the Project (ADR-060): it is, by its type, a change
+to the musical content and to nothing else. This is what makes §9.1 hold on the write side as well
+as the read side — a Function computes a change rather than performing one, so a `Delta` able to
+address the whole document would hand back the reach the Function's own parameter denies it.
+
+`ProjectMeta` is consequently outside the history: it is written when a document is created or
+loaded, by the module that owns save and load, and never by a Function. Making a metadata edit
+undoable is a superseding decision — a second Op kind over `ProjectMeta` — never a widening of
+`Op`.
 
 The Project itself holds no history. History sits *above* the Project, not inside it — which is
 what makes §9.7 structural: an Assistant with complete reach over musical content still cannot
@@ -368,7 +411,7 @@ These are the contract. Each is mechanically checkable and should have a test.
 | # | Invariant |
 |---|---|
 | I1 | Every entity has a stable, globally unique, opaque `Id`, assigned at creation and never reused. Position is never an address. |
-| I2 | `ProjectHistory.apply` is the only way to mutate a Project. Entities expose no public mutators. |
+| I2 | `ProjectHistory.apply` is the only way to mutate a Project's **musical content**. Entities expose no public mutators. `ProjectMeta` is written only by the document layer, on create and load. |
 | I3 | One Function produces exactly one Delta. A Delta is atomic: all Edits apply or none. |
 | I4 | `undo(apply(p, d)) == p` for every Project `p` and Delta `d`, and `redo(undo(apply(p, d))) == apply(p, d)`. Bit-for-bit. |
 | I5 | Applying a Delta while the cursor is not at the head discards everything after the cursor. |
@@ -377,6 +420,13 @@ These are the contract. Each is mechanically checkable and should have a test.
 | I8 | No dangling references. Every `Id` reference resolves to a live entity in the same Project. |
 | I9 | All musical time is integer `Ticks` at PPQ 960; pitch and velocity are integers 0–127. |
 | I10 | No type name, field name, enum value, `Id` prefix, namespace or format constant contains the product name or any part of it (§8.1), and no retired §5.1 term appears in any identifier. |
+| I11 | A **Function** receives `MusicalContent` and nothing else, and a `Delta` addresses `MusicalContent` and nothing else. No path exists from `MusicalContent` to `ProjectMeta`, to Settings, or to the filesystem (function-surface §1). |
+
+I11 is enforced three ways, all in CI: a compile-time census of `MusicalContent`, `ProjectMeta` and
+`Project` that fails to build when a member is added or moved; a `static_assert` per Function that
+its first parameter is `const MusicalContent&`; and `tests/reach_rule_lint.py`, which fails when any
+`*_functions.h` or `*_functions.cpp` names a `Project`-rooted identifier at all — the check that
+covers Functions nobody has written yet. All three live in `tests/`.
 
 I10 is enforced by a lint over **identifiers** — type names, field names, enum values, namespaces
 and format constants, in source and in the schema tables above — failing on `fruity`, `claw`,

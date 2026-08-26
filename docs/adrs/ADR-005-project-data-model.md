@@ -5,6 +5,7 @@
 - **Issue:** #5 — Design the Project data model
 - **Decided by:** Architect agent; requires project-owner ratification, see *Open items*
 - **Supersedes:** nothing
+- **Amended by:** [`ADR-060`](ADR-060-musical-content-root.md) — D1's Id addressing and D5's single door are unchanged; what changes is *what they address*. See *Amendments*.
 - **Contract:** [`docs/specs/project-data-model.md`](../specs/project-data-model.md)
 
 This ADR records *why*. The spec records *what*, and is normative. Where they disagree, the spec
@@ -273,6 +274,27 @@ why it must not be stored: in the last row the answer is *yes* even though no Pa
 4. **Automation is not in this contract.** §3.5 does not list it, so it is named as an extension
    point and not designed. Confirm it is genuinely post-MVP; if not, it belongs in this model rather
    than bolted on later.
+
+## Amendments
+
+### ADR-060 (issue #60) — the Project splits in two
+
+This ADR left `Project` holding the musical content directly, which satisfied ADR-006's obligation
+**O-5.1** only by coincidence: nothing non-musical had been added yet. ADR-060 makes the split
+structural — `Project { meta: ProjectMeta, musical: MusicalContent }` — and retypes every Function
+and every `Delta` on `MusicalContent`.
+
+What this changes here:
+
+- **D1 is unchanged.** Entities are still `Id`-addressed and a mutation is still
+  `(entity, field, before, after)`. The split says which *root* those entities hang from.
+- **D5 is refined, not reversed.** `ProjectHistory` still owns the Project and `apply` is still the
+  only door — to the **musical content**. `ProjectMeta` is written by the module that owns save and
+  load, on create and load, and is not delta-managed. History still sits above the Project, so §9.7
+  is untouched.
+- **The Sampler-only consequence, provenance, and every rejected alternative in this ADR stand.**
+
+Read ADR-060 for the reasoning and for what it means for issues #13, #54 and #55.
 
 ## Note on ADR-001
 
