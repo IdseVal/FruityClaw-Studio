@@ -60,9 +60,9 @@ int main(int argc, char** argv) {
         sample_rate = 48000.0;  // the engine still bakes, for a later device
     }
 
-    player.publish(history.read(), sample_rate);
+    player.publish(history.read().musical, sample_rate);
     history.observe([&history, &player, sample_rate] {
-        player.publish(history.read(), sample_rate);
+        player.publish(history.read().musical, sample_rate);
     });
 
     ui::MainWindow window(history, player, player, FCS_PRODUCT_NAME_STR);

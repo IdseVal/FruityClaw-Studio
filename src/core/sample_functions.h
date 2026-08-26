@@ -2,7 +2,7 @@
 // matching the frozen catalogue in docs/specs/function-surface.md section
 // 5.5 on the frozen data-model terms. Same discipline as
 // arrangement_functions.h: each function validates against the current
-// Project and produces exactly one Delta; ProjectHistory applies it.
+// MusicalContent and produces exactly one Delta; ProjectHistory applies it.
 //
 // Naming: the catalogue's `create_channel` / `set_channel_sample` pair
 // appears here as `create_instrument`, because the data model has no
@@ -19,15 +19,15 @@
 
 namespace core::functions {
 
-// Adds one Sampler Instrument playing one Sample already in the Project.
+// Adds one Sampler Instrument playing one Sample already in the MusicalContent.
 // Writes nothing into any Pattern.
-Expected<CreatedDelta> create_instrument(const Project& project, std::string name, Id sample,
+Expected<CreatedDelta> create_instrument(const MusicalContent& content, std::string name, Id sample,
                                          SamplerMode mode, Origin origin = Origin::User);
 
 // Appends one empty Part for one Instrument to one Pattern — a new row in
 // the step sequencer with no steps on. Fails when the Pattern already has a
 // Part for that Instrument, so a lane is never duplicated by accident.
-Expected<CreatedDelta> add_part(const Project& project, Id pattern, Id instrument,
+Expected<CreatedDelta> add_part(const MusicalContent& content, Id pattern, Id instrument,
                                 Origin origin = Origin::User);
 
 }  // namespace core::functions

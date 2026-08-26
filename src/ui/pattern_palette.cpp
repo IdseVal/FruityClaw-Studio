@@ -23,7 +23,7 @@ PatternPalette::PatternPalette(core::ProjectHistory& history, QWidget* parent)
 
 void PatternPalette::reload() {
     clear();
-    const auto& patterns = history_.read().patterns.items;
+    const auto& patterns = history_.read().musical.patterns.items;
     for (std::size_t i = 0; i < patterns.size(); ++i) {
         const core::Pattern& pattern = patterns[i];
         QColor colour = pattern.colour ? theme::from_colour(*pattern.colour)
@@ -45,14 +45,14 @@ void PatternPalette::reload() {
     }
 
     // A deleted armed Pattern disarms.
-    if (armed_ && !history_.read().patterns.find(*armed_)) {
+    if (armed_ && !history_.read().musical.patterns.find(*armed_)) {
         armed_.reset();
         emit armed_changed();
     }
 }
 
 void PatternPalette::toggle_row(int row) {
-    const auto& patterns = history_.read().patterns.items;
+    const auto& patterns = history_.read().musical.patterns.items;
     if (row < 0 || row >= static_cast<int>(patterns.size())) return;
     core::Id id = patterns[static_cast<std::size_t>(row)].id;
     if (armed_ && *armed_ == id) {

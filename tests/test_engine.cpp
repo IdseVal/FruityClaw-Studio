@@ -43,19 +43,19 @@ TEST_CASE("a Placement longer than its Pattern loops; shorter trims") {
     auto f = make_fixture();
     ProjectHistory history(std::move(f.project));
 
-    auto placed = add_placement(history.read(), f.arrangement, f.track_a, f.drum_pattern,
+    auto placed = add_placement(history.read().musical, f.arrangement, f.track_a, f.drum_pattern,
                                 0, 8 * kPpq);  // twice the Pattern length
     REQUIRE(placed.ok());
     REQUIRE(history.apply(std::move(placed->delta)) == ApplyResult::Applied);
-    auto looped = engine::bake(history.read(), kRate);
+    auto looped = engine::bake(history.read().musical, kRate);
     CHECK(looped->triggers.size() == 8);  // 4 hits, twice around
 
     REQUIRE(history.undo());
-    auto trimmed_placed = add_placement(history.read(), f.arrangement, f.track_a,
+    auto trimmed_placed = add_placement(history.read().musical, f.arrangement, f.track_a,
                                         f.drum_pattern, 0, 2 * kPpq);  // half
     REQUIRE(trimmed_placed.ok());
     REQUIRE(history.apply(std::move(trimmed_placed->delta)) == ApplyResult::Applied);
-    auto trimmed = engine::bake(history.read(), kRate);
+    auto trimmed = engine::bake(history.read().musical, kRate);
     CHECK(trimmed->triggers.size() == 2);  // hits at or past the cut are dropped
 }
 
@@ -64,11 +64,11 @@ TEST_CASE("drum and melody Patterns bake through the same path") {
     ProjectHistory history(std::move(f.project));
 
     for (Id pattern : {f.drum_pattern, f.melody_pattern}) {
-        auto placed = add_placement(history.read(), f.arrangement, f.track_a, pattern, 0);
+        auto placed = add_placement(history.read().musical, f.arrangement, f.track_a, pattern, 0);
         REQUIRE(placed.ok());
         REQUIRE(history.apply(std::move(placed->delta)) == ApplyResult::Applied);
     }
-    auto model = engine::bake(history.read(), kRate);
+    auto model = engine::bake(history.read().musical, kRate);
     CHECK(model->triggers.size() == 6);  // 4 drum hits + 2 melody notes
     CHECK(model->instruments.size() == 2);
 
@@ -88,14 +88,14 @@ TEST_CASE("drum and melody Patterns bake through the same path") {
 TEST_CASE("muted Tracks and muted Placements are silent by omission") {
     auto f = make_fixture();
     ProjectHistory history(std::move(f.project));
-    auto placed = add_placement(history.read(), f.arrangement, f.track_a, f.drum_pattern, 0);
+    auto placed = add_placement(history.read().musical, f.arrangement, f.track_a, f.drum_pattern, 0);
     REQUIRE(placed.ok());
     REQUIRE(history.apply(std::move(placed->delta)) == ApplyResult::Applied);
 
-    auto muted = set_track_muted(history.read(), f.arrangement, f.track_a, true);
+    auto muted = set_track_muted(history.read().musical, f.arrangement, f.track_a, true);
     REQUIRE(muted.ok());
     REQUIRE(history.apply(std::move(*muted)) == ApplyResult::Applied);
-    CHECK(engine::bake(history.read(), kRate)->triggers.empty());
+    CHECK(engine::bake(history.read().musical, kRate)->triggers.empty());
 }
 
 TEST_CASE("a placed Pattern is audible and an empty Arrangement is silent") {
@@ -104,16 +104,16 @@ TEST_CASE("a placed Pattern is audible and an empty Arrangement is silent") {
     engine::Engine player;
 
     // Empty Arrangement: silence.
-    player.publish(history.read(), kRate);
+    player.publish(history.read().musical, kRate);
     player.play();
     auto silent = render_blocks(player, 8, 512);
     for (double rms : silent) CHECK(rms == Catch::Approx(0.0).margin(1e-9));
 
     // Place drums at the start; the first beat lands in the first blocks.
-    auto placed = add_placement(history.read(), f.arrangement, f.track_a, f.drum_pattern, 0);
+    auto placed = add_placement(history.read().musical, f.arrangement, f.track_a, f.drum_pattern, 0);
     REQUIRE(placed.ok());
     REQUIRE(history.apply(std::move(placed->delta)) == ApplyResult::Applied);
-    player.publish(history.read(), kRate);
+    player.publish(history.read().musical, kRate);
     player.seek(0);
 
     auto audible = render_blocks(player, 8, 512);
@@ -127,16 +127,16 @@ TEST_CASE("undoing a Placement removal restores its sound; redo silences again")
     ProjectHistory history(std::move(f.project));
     engine::Engine player;
 
-    auto placed = add_placement(history.read(), f.arrangement, f.track_a, f.drum_pattern, 0);
+    auto placed = add_placement(history.read().musical, f.arrangement, f.track_a, f.drum_pattern, 0);
     REQUIRE(placed.ok());
     Id id = placed->id;
     REQUIRE(history.apply(std::move(placed->delta)) == ApplyResult::Applied);
-    auto removed = remove_placement(history.read(), f.arrangement, f.track_a, id);
+    auto removed = remove_placement(history.read().musical, f.arrangement, f.track_a, id);
     REQUIRE(removed.ok());
     REQUIRE(history.apply(std::move(*removed)) == ApplyResult::Applied);
 
     auto rms_of_current = [&] {
-        player.publish(history.read(), kRate);
+        player.publish(history.read().musical, kRate);
         player.seek(0);
         player.play();
         auto rms = render_blocks(player, 4, 512);
@@ -156,7 +156,7 @@ TEST_CASE("offline render throughput is comfortably realtime") {
     auto f = make_fixture();
     ProjectHistory history(std::move(f.project));
     for (int bar = 0; bar < 16; ++bar) {
-        auto placed = add_placement(history.read(), f.arrangement,
+        auto placed = add_placement(history.read().musical, f.arrangement,
                                     bar % 2 == 0 ? f.track_a : f.track_b,
                                     bar % 3 == 0 ? f.melody_pattern : f.drum_pattern,
                                     bar * 4 * kPpq);
@@ -165,7 +165,7 @@ TEST_CASE("offline render throughput is comfortably realtime") {
     }
 
     engine::Engine player;
-    player.publish(history.read(), kRate);
+    player.publish(history.read().musical, kRate);
     player.play();
 
     constexpr int kBlocks = 512;
@@ -183,11 +183,11 @@ TEST_CASE("offline render throughput is comfortably realtime") {
 
 TEST_CASE("an audition is audible while the transport is stopped and replaces itself") {
     auto f = make_fixture();
-    SampleSource tone = f.project.samples.items[1].source;  // 0.5 s
-    SampleSource hit = f.project.samples.items[0].source;   // 0.1 s
+    SampleSource tone = f.project.musical.samples.items[1].source;  // 0.5 s
+    SampleSource hit = f.project.musical.samples.items[0].source;   // 0.1 s
     ProjectHistory history(std::move(f.project));
     engine::Engine player;
-    player.publish(history.read(), kRate);
+    player.publish(history.read().musical, kRate);
 
     // Silent before; nothing is placed and nothing is playing.
     CHECK(render_blocks(player, 2, 512).back() == 0.0);
@@ -245,7 +245,7 @@ TEST_CASE("an audition plays at native pitch: a 96 kHz Sample lasts half its fra
     auto f = make_fixture();
     ProjectHistory history(std::move(f.project));
     engine::Engine player;
-    player.publish(history.read(), kRate);
+    player.publish(history.read().musical, kRate);
 
     // 0.1 s of audio at 96 kHz is 9600 frames but must occupy 4800 output
     // frames: audible through block 9 of 512, silent by block 12.
@@ -266,7 +266,7 @@ TEST_CASE("an audition keeps a stereo Sample's channels apart and centres a mono
     auto f = make_fixture();
     ProjectHistory history(std::move(f.project));
     engine::Engine player;
-    player.publish(history.read(), kRate);
+    player.publish(history.read().musical, kRate);
 
     player.audition(make_level(0.05, kRate, 2, 0.5f, -0.25f));
     auto [left, right] = render_stereo(player, 64);
@@ -289,7 +289,7 @@ TEST_CASE("an audition keeps a stereo Sample's channels apart and centres a mono
 TEST_CASE("an audition mixes over a running transport without disturbing it") {
     auto f = make_fixture();
     ProjectHistory history(std::move(f.project));
-    auto placed = add_placement(history.read(), f.arrangement, f.track_a, f.drum_pattern, 0);
+    auto placed = add_placement(history.read().musical, f.arrangement, f.track_a, f.drum_pattern, 0);
     REQUIRE(placed.ok());
     REQUIRE(history.apply(std::move(placed->delta)) == ApplyResult::Applied);
 
@@ -297,7 +297,7 @@ TEST_CASE("an audition mixes over a running transport without disturbing it") {
     // what the transport reports when nothing is auditioning.
     engine::Engine player, twin;
     for (engine::Engine* e : {&player, &twin}) {
-        e->publish(history.read(), kRate);
+        e->publish(history.read().musical, kRate);
         e->play();
         render_blocks(*e, 4, 512);
     }
@@ -320,7 +320,7 @@ TEST_CASE("an empty or absent Sample is not auditioned and does not silence the 
     auto f = make_fixture();
     ProjectHistory history(std::move(f.project));
     engine::Engine player;
-    player.publish(history.read(), kRate);
+    player.publish(history.read().musical, kRate);
 
     player.audition(make_level(0.05, kRate, 1, 0.5f, 0.5f));
     player.audition(nullptr);

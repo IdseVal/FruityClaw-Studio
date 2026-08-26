@@ -78,7 +78,7 @@ struct BrowserFixture {
         Sample generated{new_id(), "Riser", test_support::make_tone(0.2, 440.0),
                          Provenance::generated("test-model", 1700000000)};
         id = generated.id;
-        project.samples.items.push_back(generated);
+        project.musical.samples.items.push_back(generated);
         return project;
     }
 
@@ -116,12 +116,12 @@ struct ViewFixture {
     }
 
     const Track& track(int index) const {
-        return history.read().arrangements.items.front().tracks[
+        return history.read().musical.arrangements.items.front().tracks[
             static_cast<std::size_t>(index)];
     }
 
     Id place(Id track_id, Ticks start) {
-        auto placed = add_placement(history.read(), ids.arrangement, track_id,
+        auto placed = add_placement(history.read().musical, ids.arrangement, track_id,
                                     ids.drum_pattern, start);
         REQUIRE(placed.ok());
         REQUIRE(history.apply(std::move(placed->delta)) == ApplyResult::Applied);
@@ -159,7 +159,7 @@ TEST_CASE("clicking a lane with nothing armed places nothing and records nothing
 TEST_CASE("a drag commits exactly one Delta matching the preview") {
     ViewFixture f;
     f.place(f.ids.track_a, 0);  // 4 beats long: pixels 160..272 on row 0
-    Project before = f.history.read();
+    MusicalContent before = f.history.read().musical;
 
     SECTION("move within the Track lands on the previewed beat") {
         QTest::mousePress(&f.view, Qt::LeftButton, {}, QPoint(beat_x(2), track_y(0)));
@@ -172,7 +172,7 @@ TEST_CASE("a drag commits exactly one Delta matching the preview") {
 
         // Exactly one entry beyond the setup placement.
         REQUIRE(f.history.undo());
-        CHECK(f.history.read() == before);
+        CHECK(f.history.read().musical == before);
     }
 
     SECTION("move across Tracks is one undoable step") {
@@ -185,7 +185,7 @@ TEST_CASE("a drag commits exactly one Delta matching the preview") {
         CHECK(f.track(1).placements[0].start == 2 * kPpq);
 
         REQUIRE(f.history.undo());
-        CHECK(f.history.read() == before);
+        CHECK(f.history.read().musical == before);
     }
 
     SECTION("dragging the right edge resizes to the previewed length") {
@@ -198,16 +198,16 @@ TEST_CASE("a drag commits exactly one Delta matching the preview") {
         CHECK(f.track(0).placements[0].start == 0);
         CHECK(f.track(0).placements[0].length == 6 * kPpq);
         // The referenced Pattern is untouched.
-        CHECK(f.history.read().patterns.find(f.ids.drum_pattern)->length == 4 * kPpq);
+        CHECK(f.history.read().musical.patterns.find(f.ids.drum_pattern)->length == 4 * kPpq);
 
         REQUIRE(f.history.undo());
-        CHECK(f.history.read() == before);
+        CHECK(f.history.read().musical == before);
     }
 
     SECTION("a click without movement commits nothing") {
         QTest::mousePress(&f.view, Qt::LeftButton, {}, QPoint(beat_x(2), track_y(0)));
         QTest::mouseRelease(&f.view, Qt::LeftButton, {}, QPoint(beat_x(2), track_y(0)));
-        CHECK(f.history.read() == before);
+        CHECK(f.history.read().musical == before);
         CHECK(f.history.state().undo_label == "Place 'Drums A' on 'Track 1'");
     }
 }
@@ -246,7 +246,7 @@ TEST_CASE("the add-track affordance appends one Track") {
     int add_y = kRulerHeight + 2 * kTrackHeight + 13;  // centre of the 26 px strip
     QTest::mouseClick(&f.view, Qt::LeftButton, {}, QPoint(80, add_y));
 
-    const auto& tracks = f.history.read().arrangements.items.front().tracks;
+    const auto& tracks = f.history.read().musical.arrangements.items.front().tracks;
     REQUIRE(tracks.size() == 3);
     CHECK(tracks.back().name == "Track 3");
     CHECK(f.history.state().undo_label == "Add Track 'Track 3'");
@@ -275,14 +275,14 @@ TEST_CASE("a rename landing on a deleted Track becomes a hint, not a mutation") 
     editor->setText("Ghost");
 
     // The Track vanishes behind the open editor (an Assistant could do this).
-    auto del = delete_track(f.history.read(), f.ids.arrangement, f.ids.track_a);
+    auto del = delete_track(f.history.read().musical, f.ids.arrangement, f.ids.track_a);
     REQUIRE(del.ok());
     REQUIRE(f.history.apply(std::move(*del)) == ApplyResult::Applied);
-    Project after_delete = f.history.read();
+    MusicalContent after_delete = f.history.read().musical;
 
     QTest::keyClick(editor, Qt::Key_Return);
 
-    CHECK(f.history.read() == after_delete);
+    CHECK(f.history.read().musical == after_delete);
     CHECK(f.history.state().undo_label == "Delete Track 'Track 1'");
     REQUIRE(!hints.isEmpty());
     CHECK(hints.last().at(0).toString().contains("No such Track"));
@@ -324,7 +324,7 @@ TEST_CASE("MainWindow's undo and redo actions follow HistoryState") {
     CHECK_FALSE(undo_action->isEnabled());
     CHECK_FALSE(redo_action->isEnabled());
 
-    auto created = create_track(history.read(), ids.arrangement, "Bass", std::nullopt);
+    auto created = create_track(history.read().musical, ids.arrangement, "Bass", std::nullopt);
     REQUIRE(created.ok());
     REQUIRE(history.apply(std::move(created->delta)) == ApplyResult::Applied);
 
@@ -337,7 +337,7 @@ TEST_CASE("MainWindow's undo and redo actions follow HistoryState") {
     CHECK(redo_action->text() == "Redo Add Track 'Bass'");
 
     redo_action->trigger();
-    CHECK(history.read().arrangements.items.front().tracks.size() == 3);
+    CHECK(history.read().musical.arrangements.items.front().tracks.size() == 3);
 }
 
 TEST_CASE("MainWindow's transport poll reflects the port's status") {
@@ -378,8 +378,8 @@ TEST_CASE("the sidebar lists every Sample and clicking one auditions it") {
 
     QTest::mouseClick(f.list->viewport(), Qt::LeftButton, {}, f.row_centre(1));
     REQUIRE(f.audition.played.size() == 1);
-    CHECK(f.audition.played[0] == f.history.read().samples.items[1].source);
-    CHECK(f.browser.selected() == f.history.read().samples.items[1].id);
+    CHECK(f.audition.played[0] == f.history.read().musical.samples.items[1].source);
+    CHECK(f.browser.selected() == f.history.read().musical.samples.items[1].id);
     CHECK_FALSE(f.history.state().can_undo);  // hearing is not a mutation
 }
 
@@ -426,13 +426,13 @@ TEST_CASE("the filter narrows the list by name") {
 
 TEST_CASE("placing a Sample into a Pattern is one undoable step") {
     BrowserFixture f;
-    Project before = f.history.read();
+    MusicalContent before = f.history.read().musical;
     f.list->setCurrentRow(2);  // the Riser: no Instrument plays it yet
 
     SECTION("a Sample without an Instrument gets one, then a lane") {
         f.browser.place_selected_in(f.ids.drum_pattern);
 
-        const Project& p = f.history.read();
+        const MusicalContent& p = f.history.read().musical;
         REQUIRE(p.instruments.items.size() == 3);
         CHECK(p.instruments.items.back().name == "Riser");
         CHECK(p.instruments.items.back().params.sample == f.generated_sample);
@@ -443,13 +443,13 @@ TEST_CASE("placing a Sample into a Pattern is one undoable step") {
         CHECK(f.history.state().undo_label == "Place 'Riser' in 'Drums A'");
 
         REQUIRE(f.history.undo());
-        CHECK(f.history.read() == before);
+        CHECK(f.history.read().musical == before);
     }
 
     SECTION("a Sample already played by an Instrument reuses it") {
         f.list->setCurrentRow(1);  // tone: played by 'Keys'
         f.browser.place_selected_in(f.ids.drum_pattern);
-        const Project& p = f.history.read();
+        const MusicalContent& p = f.history.read().musical;
         CHECK(p.instruments.items.size() == 2);
         const Pattern* drums = p.patterns.find(f.ids.drum_pattern);
         REQUIRE(drums->parts.size() == 2);
@@ -460,7 +460,7 @@ TEST_CASE("placing a Sample into a Pattern is one undoable step") {
         QSignalSpy hints(&f.browser, &ui::SampleBrowser::hint_changed);
         f.list->setCurrentRow(0);  // hit: already the drum Pattern's lane
         f.browser.place_selected_in(f.ids.drum_pattern);
-        CHECK(f.history.read() == before);
+        CHECK(f.history.read().musical == before);
         CHECK_FALSE(f.history.state().can_undo);
         REQUIRE(!hints.isEmpty());
         CHECK(hints.last().at(0).toString() == "'hit' is already in 'Drums A'.");
@@ -476,7 +476,7 @@ TEST_CASE("placing a Sample into a Pattern is one undoable step") {
         REQUIRE(button->menu()->actions().size() == 2);
         CHECK(button->menu()->actions()[1]->text() == "Melody A");
         button->menu()->actions()[1]->trigger();
-        CHECK(f.history.read().patterns.find(f.ids.melody_pattern)->parts.size() == 2);
+        CHECK(f.history.read().musical.patterns.find(f.ids.melody_pattern)->parts.size() == 2);
         CHECK(f.history.state().undo_label == "Place 'Riser' in 'Melody A'");
     }
 }
@@ -493,7 +493,7 @@ TEST_CASE("placing under an active filter acts on the Sample shown, not the row 
     QSignalSpy hints(&f.browser, &ui::SampleBrowser::hint_changed);
     f.browser.place_selected_in(f.ids.melody_pattern);
 
-    const Project& p = f.history.read();
+    const MusicalContent& p = f.history.read().musical;
     REQUIRE(p.instruments.items.size() == 3);
     CHECK(p.instruments.items.back().params.sample == f.generated_sample);
     const Pattern* melody = p.patterns.find(f.ids.melody_pattern);
@@ -514,20 +514,20 @@ TEST_CASE("the sidebar follows the History: undo takes a placed lane back, selec
     BrowserFixture f;
     f.list->setCurrentRow(1);
     f.browser.place_selected_in(f.ids.drum_pattern);
-    REQUIRE(f.history.read().patterns.find(f.ids.drum_pattern)->parts.size() == 2);
+    REQUIRE(f.history.read().musical.patterns.find(f.ids.drum_pattern)->parts.size() == 2);
 
     REQUIRE(f.history.undo());
-    CHECK(f.history.read().patterns.find(f.ids.drum_pattern)->parts.size() == 1);
+    CHECK(f.history.read().musical.patterns.find(f.ids.drum_pattern)->parts.size() == 1);
     CHECK(f.list->count() == 3);
-    CHECK(f.browser.selected() == f.history.read().samples.items[1].id);
+    CHECK(f.browser.selected() == f.history.read().musical.samples.items[1].id);
 
     // Nothing selected: placing is a no-op and the button is disabled.
     f.list->clearSelection();
     f.list->setCurrentItem(nullptr);
     CHECK_FALSE(f.browser.selected().has_value());
-    Project before = f.history.read();
+    MusicalContent before = f.history.read().musical;
     f.browser.place_selected_in(f.ids.drum_pattern);
-    CHECK(f.history.read() == before);
+    CHECK(f.history.read().musical == before);
     QToolButton* button = nullptr;
     for (QToolButton* candidate : f.browser.findChildren<QToolButton*>()) {
         if (candidate->menu()) button = candidate;
@@ -538,7 +538,7 @@ TEST_CASE("the sidebar follows the History: undo takes a placed lane back, selec
 
 TEST_CASE("a Sample without audio lists, opens, and is handed to the port as absent") {
     auto ids = make_fixture();
-    ids.project.samples.items.push_back(Sample{new_id(), "silent", nullptr, Provenance::human()});
+    ids.project.musical.samples.items.push_back(Sample{new_id(), "silent", nullptr, Provenance::human()});
     ProjectHistory history(std::move(ids.project));
     StubAudition audition;
     ui::SampleBrowser browser(history, audition);

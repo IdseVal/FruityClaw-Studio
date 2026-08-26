@@ -25,7 +25,7 @@ TEST_CASE("a publish storm against a running audio thread stays clean") {
 
     // Real triggers on both Tracks so renders do actual voice work.
     for (int bar = 0; bar < 8; ++bar) {
-        auto placed = add_placement(history.read(), f.arrangement,
+        auto placed = add_placement(history.read().musical, f.arrangement,
                                     bar % 2 == 0 ? f.track_a : f.track_b,
                                     bar % 3 == 0 ? f.melody_pattern : f.drum_pattern,
                                     bar * 4 * kPpq);
@@ -34,7 +34,7 @@ TEST_CASE("a publish storm against a running audio thread stays clean") {
     }
 
     engine::Engine player;
-    player.publish(history.read(), 48000.0);
+    player.publish(history.read().musical, 48000.0);
     player.play();
 
     std::atomic<bool> done{false};
@@ -57,10 +57,10 @@ TEST_CASE("a publish storm against a running audio thread stays clean") {
     // in. Half the mutes are same-value no-ops; every iteration republishes,
     // which is the reclaim path's worst case.
     for (int i = 0; i < 4000; ++i) {
-        auto muted = set_track_muted(history.read(), f.arrangement, f.track_a, i % 2 == 0);
+        auto muted = set_track_muted(history.read().musical, f.arrangement, f.track_a, i % 2 == 0);
         REQUIRE(muted.ok());
         history.apply(std::move(*muted));
-        player.publish(history.read(), 48000.0);
+        player.publish(history.read().musical, 48000.0);
         if (i % 50 == 0) player.seek(0);
     }
 
@@ -72,7 +72,7 @@ TEST_CASE("a publish storm against a running audio thread stays clean") {
 
     // The engine is still coherent after the storm: it accepts a publish and
     // renders a finite block on this thread.
-    player.publish(history.read(), 48000.0);
+    player.publish(history.read().musical, 48000.0);
     std::vector<float> left(512), right(512);
     float* channels[2] = {left.data(), right.data()};
     player.render(channels, 2, 512);
@@ -86,12 +86,12 @@ TEST_CASE("a publish storm against a running audio thread stays clean") {
 // leave no dangling cue while one may still be playing.
 TEST_CASE("an audition storm against a running audio thread stays clean") {
     auto f = make_fixture();
-    SampleSource hit = f.project.samples.items[0].source;
-    SampleSource tone = f.project.samples.items[1].source;
+    SampleSource hit = f.project.musical.samples.items[0].source;
+    SampleSource tone = f.project.musical.samples.items[1].source;
     ProjectHistory history(std::move(f.project));
 
     engine::Engine player;
-    player.publish(history.read(), 48000.0);
+    player.publish(history.read().musical, 48000.0);
     player.play();
 
     std::atomic<bool> done{false};
@@ -115,7 +115,7 @@ TEST_CASE("an audition storm against a running audio thread stays clean") {
     // retire list interleaves both object kinds.
     for (int i = 0; i < 8000; ++i) {
         player.audition(i % 3 == 0 ? tone : hit);
-        if (i % 7 == 0) player.publish(history.read(), 48000.0);
+        if (i % 7 == 0) player.publish(history.read().musical, 48000.0);
     }
 
     done.store(true, std::memory_order_release);

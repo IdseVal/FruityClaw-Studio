@@ -6,7 +6,7 @@
 namespace core::functions {
 namespace {
 
-Pattern& pattern_or_throw(Project& p, Id pattern) {
+Pattern& pattern_or_throw(MusicalContent& p, Id pattern) {
     if (Pattern* pat = p.patterns.find(pattern)) return *pat;
     throw OpError("Pattern not found: " + to_string(pattern));
 }
@@ -27,7 +27,7 @@ Op insert_instrument_op(Instrument instrument, std::size_t index);
 Op remove_instrument_op(Id instrument, std::size_t bytes) {
     Op op;
     op.bytes = bytes;
-    op.run = [instrument](Project& p) -> std::optional<Op> {
+    op.run = [instrument](MusicalContent& p) -> std::optional<Op> {
         auto& items = p.instruments.items;
         for (auto it = items.begin(); it != items.end(); ++it) {
             if (it->id == instrument) {
@@ -45,7 +45,7 @@ Op remove_instrument_op(Id instrument, std::size_t bytes) {
 Op insert_instrument_op(Instrument instrument, std::size_t index) {
     Op op;
     op.bytes = entity_bytes(instrument);
-    op.run = [instrument = std::move(instrument), index](Project& p) -> std::optional<Op> {
+    op.run = [instrument = std::move(instrument), index](MusicalContent& p) -> std::optional<Op> {
         auto& items = p.instruments.items;
         std::size_t at = std::min(index, items.size());
         items.insert(items.begin() + static_cast<std::ptrdiff_t>(at), instrument);
@@ -59,7 +59,7 @@ Op insert_part_op(Id pattern, Part part, std::size_t index);
 Op remove_part_op(Id pattern, Id part, std::size_t bytes) {
     Op op;
     op.bytes = bytes;
-    op.run = [pattern, part](Project& p) -> std::optional<Op> {
+    op.run = [pattern, part](MusicalContent& p) -> std::optional<Op> {
         Pattern& pat = pattern_or_throw(p, pattern);
         for (auto it = pat.parts.begin(); it != pat.parts.end(); ++it) {
             if (it->id == part) {
@@ -77,7 +77,7 @@ Op remove_part_op(Id pattern, Id part, std::size_t bytes) {
 Op insert_part_op(Id pattern, Part part, std::size_t index) {
     Op op;
     op.bytes = entity_bytes(part);
-    op.run = [pattern, part = std::move(part), index](Project& p) -> std::optional<Op> {
+    op.run = [pattern, part = std::move(part), index](MusicalContent& p) -> std::optional<Op> {
         Pattern& pat = pattern_or_throw(p, pattern);
         std::size_t at = std::min(index, pat.parts.size());
         pat.parts.insert(pat.parts.begin() + static_cast<std::ptrdiff_t>(at), part);
@@ -88,9 +88,9 @@ Op insert_part_op(Id pattern, Part part, std::size_t index) {
 
 }  // namespace
 
-Expected<CreatedDelta> create_instrument(const Project& project, std::string name, Id sample,
+Expected<CreatedDelta> create_instrument(const MusicalContent& content, std::string name, Id sample,
                                          SamplerMode mode, Origin origin) {
-    if (!project.samples.find(sample)) return Expected<CreatedDelta>::failure("No such Sample");
+    if (!content.samples.find(sample)) return Expected<CreatedDelta>::failure("No such Sample");
 
     Instrument instrument;
     instrument.id = new_id();
@@ -103,15 +103,15 @@ Expected<CreatedDelta> create_instrument(const Project& project, std::string nam
     delta.origin = origin;
     Id id = instrument.id;
     delta.ops.push_back(
-        insert_instrument_op(std::move(instrument), project.instruments.items.size()));
+        insert_instrument_op(std::move(instrument), content.instruments.items.size()));
     return Expected<CreatedDelta>::success({std::move(delta), id});
 }
 
-Expected<CreatedDelta> add_part(const Project& project, Id pattern, Id instrument,
+Expected<CreatedDelta> add_part(const MusicalContent& content, Id pattern, Id instrument,
                                 Origin origin) {
-    const Pattern* pat = project.patterns.find(pattern);
+    const Pattern* pat = content.patterns.find(pattern);
     if (!pat) return Expected<CreatedDelta>::failure("No such Pattern");
-    const Instrument* inst = project.instruments.find(instrument);
+    const Instrument* inst = content.instruments.find(instrument);
     if (!inst) return Expected<CreatedDelta>::failure("No such Instrument");
     for (const Part& part : pat->parts) {
         if (part.instrument == instrument)

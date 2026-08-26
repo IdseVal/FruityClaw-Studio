@@ -13,7 +13,7 @@ namespace {
 
 Delta rename_delta(const ProjectHistory& history, const test_support::Fixture& f,
                    const std::string& name) {
-    auto result = rename_track(history.read(), f.arrangement, f.track_a, name);
+    auto result = rename_track(history.read().musical, f.arrangement, f.track_a, name);
     REQUIRE(result.ok());
     return std::move(*result);
 }
@@ -22,14 +22,14 @@ Delta rename_delta(const ProjectHistory& history, const test_support::Fixture& f
 
 TEST_CASE("apply then undo restores the exact prior Project") {
     auto f = make_fixture();
-    Project original = f.project;
+    MusicalContent original = f.project.musical;
     ProjectHistory history(std::move(f.project));
 
     REQUIRE(history.apply(rename_delta(history, f, "Renamed")) == ApplyResult::Applied);
-    REQUIRE_FALSE(history.read() == original);
+    REQUIRE_FALSE(history.read().musical == original);
 
     REQUIRE(history.undo());
-    CHECK(history.read() == original);
+    CHECK(history.read().musical == original);
 }
 
 TEST_CASE("undo then redo restores the applied state bit for bit") {
@@ -37,11 +37,11 @@ TEST_CASE("undo then redo restores the applied state bit for bit") {
     ProjectHistory history(std::move(f.project));
 
     REQUIRE(history.apply(rename_delta(history, f, "Renamed")) == ApplyResult::Applied);
-    Project applied = history.read();
+    MusicalContent applied = history.read().musical;
 
     REQUIRE(history.undo());
     REQUIRE(history.redo());
-    CHECK(history.read() == applied);
+    CHECK(history.read().musical == applied);
 }
 
 TEST_CASE("applying after an undo discards the future permanently") {
@@ -66,7 +66,7 @@ TEST_CASE("a no-op Delta is not recorded and preserves the redo stack") {
     REQUIRE(history.undo());
     REQUIRE(history.state().can_redo);
 
-    auto same = set_track_muted(history.read(), f.arrangement, f.track_a, false);
+    auto same = set_track_muted(history.read().musical, f.arrangement, f.track_a, false);
     REQUIRE(same.ok());
     CHECK(history.apply(std::move(*same)) == ApplyResult::NoChange);
     CHECK(history.state().can_redo);
@@ -79,14 +79,14 @@ TEST_CASE("a failed Delta leaves the Project, the History and the future intact"
     // Build a Delta against the current state, invalidate its target, undo to
     // restore the redo stack, then apply the stale Delta: every Op throws.
     Delta stale = rename_delta(history, f, "Stale");
-    auto del = delete_track(history.read(), f.arrangement, f.track_a);
+    auto del = delete_track(history.read().musical, f.arrangement, f.track_a);
     REQUIRE(del.ok());
     REQUIRE(history.apply(std::move(*del)) == ApplyResult::Applied);
-    Project before = history.read();
+    MusicalContent before = history.read().musical;
     auto state_before = history.state();
 
     CHECK(history.apply(std::move(stale)) == ApplyResult::Failed);
-    CHECK(history.read() == before);
+    CHECK(history.read().musical == before);
     CHECK(history.state().can_undo == state_before.can_undo);
     CHECK(history.state().can_redo == state_before.can_redo);
 }
@@ -97,22 +97,22 @@ TEST_CASE("a compound Delta is atomic: a failing member rolls the rest back") {
 
     // First op succeeds (rename), second op targets a missing Track.
     Delta compound = rename_delta(history, f, "Half");
-    auto broken = rename_track(history.read(), f.arrangement, f.track_b, "Other");
+    auto broken = rename_track(history.read().musical, f.arrangement, f.track_b, "Other");
     REQUIRE(broken.ok());
     compound.ops.push_back(std::move(broken->ops[0]));
-    auto del = delete_track(history.read(), f.arrangement, f.track_b);
+    auto del = delete_track(history.read().musical, f.arrangement, f.track_b);
     REQUIRE(del.ok());
     REQUIRE(history.apply(std::move(*del)) == ApplyResult::Applied);
-    Project before = history.read();
+    MusicalContent before = history.read().musical;
 
     CHECK(history.apply(std::move(compound)) == ApplyResult::Failed);
-    CHECK(history.read() == before);
+    CHECK(history.read().musical == before);
 }
 
 TEST_CASE("a gesture collapses to one undo press") {
     auto f = make_fixture();
     ProjectHistory history(std::move(f.project));
-    Project original = history.read();
+    MusicalContent original = history.read().musical;
 
     history.begin_gesture("Rename Track");
     REQUIRE(history.apply(rename_delta(history, f, "A")) == ApplyResult::Applied);
@@ -121,11 +121,11 @@ TEST_CASE("a gesture collapses to one undo press") {
     history.end_gesture();
 
     REQUIRE(history.undo());
-    CHECK(history.read() == original);
+    CHECK(history.read().musical == original);
     CHECK_FALSE(history.state().can_undo);
 
     REQUIRE(history.redo());
-    const Arrangement* a = history.read().arrangements.find(f.arrangement);
+    const Arrangement* a = history.read().musical.arrangements.find(f.arrangement);
     REQUIRE(a);
     CHECK(a->tracks[0].name == "ABC");
 }
@@ -155,7 +155,7 @@ TEST_CASE("eviction drops the oldest entry only and never the redo stack") {
     REQUIRE(history.undo());
     CHECK_FALSE(history.state().can_undo);  // the first entry was evicted
 
-    const Arrangement* a = history.read().arrangements.find(f.arrangement);
+    const Arrangement* a = history.read().musical.arrangements.find(f.arrangement);
     REQUIRE(a);
     CHECK(a->tracks[0].name == "One");
     CHECK(history.state().can_redo);
@@ -182,7 +182,7 @@ TEST_CASE("undo labels describe the effect in domain vocabulary") {
     auto f = make_fixture();
     ProjectHistory history(std::move(f.project));
 
-    auto placed = add_placement(history.read(), f.arrangement, f.track_a,
+    auto placed = add_placement(history.read().musical, f.arrangement, f.track_a,
                                 f.drum_pattern, 0);
     REQUIRE(placed.ok());
     REQUIRE(history.apply(std::move(placed->delta)) == ApplyResult::Applied);

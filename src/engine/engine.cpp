@@ -11,9 +11,9 @@ Engine::~Engine() {
     current_.store(nullptr, std::memory_order_release);
 }
 
-void Engine::publish(const core::Project& project, double sample_rate) {
+void Engine::publish(const core::MusicalContent& content, double sample_rate) {
     sample_rate_ = sample_rate;
-    std::shared_ptr<const RenderModel> next = bake(project, sample_rate);
+    std::shared_ptr<const RenderModel> next = bake(content, sample_rate);
 
     current_.store(next.get(), std::memory_order_release);
     if (published_) retire(std::move(published_));

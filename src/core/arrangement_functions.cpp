@@ -8,12 +8,12 @@ namespace {
 
 // --- id-addressed lookups, throwing OpError from inside Ops ----------------
 
-Arrangement& arrangement_or_throw(Project& p, Id arrangement) {
+Arrangement& arrangement_or_throw(MusicalContent& p, Id arrangement) {
     if (Arrangement* a = p.arrangements.find(arrangement)) return *a;
     throw OpError("Arrangement not found: " + to_string(arrangement));
 }
 
-Track& track_or_throw(Project& p, Id arrangement, Id track) {
+Track& track_or_throw(MusicalContent& p, Id arrangement, Id track) {
     Arrangement& a = arrangement_or_throw(p, arrangement);
     for (Track& t : a.tracks)
         if (t.id == track) return t;
@@ -28,7 +28,7 @@ Placement& placement_or_throw(Track& t, Id placement) {
 
 // --- validation against the read-only view ---------------------------------
 
-const Arrangement* find_arrangement(const Project& p, Id arrangement) {
+const Arrangement* find_arrangement(const MusicalContent& p, Id arrangement) {
     return p.arrangements.find(arrangement);
 }
 
@@ -60,7 +60,7 @@ Op insert_track_op(Id arrangement, Track track, std::size_t index);
 Op remove_track_op(Id arrangement, Id track_id, std::size_t bytes) {
     Op op;
     op.bytes = bytes;
-    op.run = [arrangement, track_id, bytes](Project& p) -> std::optional<Op> {
+    op.run = [arrangement, track_id, bytes](MusicalContent& p) -> std::optional<Op> {
         Arrangement& a = arrangement_or_throw(p, arrangement);
         for (auto it = a.tracks.begin(); it != a.tracks.end(); ++it) {
             if (it->id == track_id) {
@@ -78,7 +78,7 @@ Op remove_track_op(Id arrangement, Id track_id, std::size_t bytes) {
 Op insert_track_op(Id arrangement, Track track, std::size_t index) {
     Op op;
     op.bytes = entity_bytes(track);
-    op.run = [arrangement, track = std::move(track), index](Project& p) -> std::optional<Op> {
+    op.run = [arrangement, track = std::move(track), index](MusicalContent& p) -> std::optional<Op> {
         Arrangement& a = arrangement_or_throw(p, arrangement);
         std::size_t at = std::min(index, a.tracks.size());
         a.tracks.insert(a.tracks.begin() + static_cast<std::ptrdiff_t>(at), track);
@@ -92,7 +92,7 @@ Op insert_placement_op(Id arrangement, Id track, Placement placement, std::size_
 Op remove_placement_op(Id arrangement, Id track, Id placement) {
     Op op;
     op.bytes = sizeof(Placement);
-    op.run = [arrangement, track, placement](Project& p) -> std::optional<Op> {
+    op.run = [arrangement, track, placement](MusicalContent& p) -> std::optional<Op> {
         Track& t = track_or_throw(p, arrangement, track);
         for (auto it = t.placements.begin(); it != t.placements.end(); ++it) {
             if (it->id == placement) {
@@ -110,7 +110,7 @@ Op remove_placement_op(Id arrangement, Id track, Id placement) {
 Op insert_placement_op(Id arrangement, Id track, Placement placement, std::size_t index) {
     Op op;
     op.bytes = sizeof(Placement);
-    op.run = [arrangement, track, placement, index](Project& p) -> std::optional<Op> {
+    op.run = [arrangement, track, placement, index](MusicalContent& p) -> std::optional<Op> {
         Track& t = track_or_throw(p, arrangement, track);
         std::size_t at = std::min(index, t.placements.size());
         t.placements.insert(t.placements.begin() + static_cast<std::ptrdiff_t>(at), placement);
@@ -121,17 +121,17 @@ Op insert_placement_op(Id arrangement, Id track, Placement placement, std::size_
 
 // Labels describe the effect in domain vocabulary; they never name a Function
 // (history contract section 7.3).
-std::string pattern_label(const Project& p, Id pattern) {
+std::string pattern_label(const MusicalContent& p, Id pattern) {
     const Pattern* pat = p.patterns.find(pattern);
     return pat ? "'" + pat->name + "'" : "Pattern";
 }
 
 }  // namespace
 
-Expected<CreatedDelta> create_track(const Project& project, Id arrangement,
+Expected<CreatedDelta> create_track(const MusicalContent& content, Id arrangement,
                                     std::string name, std::optional<Colour> colour,
                                     Origin origin) {
-    const Arrangement* a = find_arrangement(project, arrangement);
+    const Arrangement* a = find_arrangement(content, arrangement);
     if (!a) return Expected<CreatedDelta>::failure("No such Arrangement");
 
     Track track;
@@ -147,9 +147,9 @@ Expected<CreatedDelta> create_track(const Project& project, Id arrangement,
     return Expected<CreatedDelta>::success({std::move(delta), id});
 }
 
-Expected<Delta> delete_track(const Project& project, Id arrangement, Id track,
+Expected<Delta> delete_track(const MusicalContent& content, Id arrangement, Id track,
                              Origin origin) {
-    const Arrangement* a = find_arrangement(project, arrangement);
+    const Arrangement* a = find_arrangement(content, arrangement);
     if (!a) return Expected<Delta>::failure("No such Arrangement");
     const Track* t = find_track(*a, track);
     if (!t) return Expected<Delta>::failure("No such Track");
@@ -161,9 +161,9 @@ Expected<Delta> delete_track(const Project& project, Id arrangement, Id track,
     return Expected<Delta>::success(std::move(delta));
 }
 
-Expected<Delta> rename_track(const Project& project, Id arrangement, Id track,
+Expected<Delta> rename_track(const MusicalContent& content, Id arrangement, Id track,
                              std::string name, Origin origin) {
-    const Arrangement* a = find_arrangement(project, arrangement);
+    const Arrangement* a = find_arrangement(content, arrangement);
     const Track* t = a ? find_track(*a, track) : nullptr;
     if (!t) return Expected<Delta>::failure("No such Track");
 
@@ -171,19 +171,19 @@ Expected<Delta> rename_track(const Project& project, Id arrangement, Id track,
     delta.label = "Rename Track to '" + name + "'";
     delta.origin = origin;
     delta.ops.push_back(make_set<std::string>(
-        [arrangement, track](Project& p) {
+        [arrangement, track](MusicalContent& p) {
             return track_or_throw(p, arrangement, track).name;
         },
-        [arrangement, track](Project& p, const std::string& v) {
+        [arrangement, track](MusicalContent& p, const std::string& v) {
             track_or_throw(p, arrangement, track).name = v;
         },
         std::move(name), 64));
     return Expected<Delta>::success(std::move(delta));
 }
 
-Expected<Delta> set_track_muted(const Project& project, Id arrangement, Id track,
+Expected<Delta> set_track_muted(const MusicalContent& content, Id arrangement, Id track,
                                 bool muted, Origin origin) {
-    const Arrangement* a = find_arrangement(project, arrangement);
+    const Arrangement* a = find_arrangement(content, arrangement);
     const Track* t = a ? find_track(*a, track) : nullptr;
     if (!t) return Expected<Delta>::failure("No such Track");
 
@@ -191,23 +191,23 @@ Expected<Delta> set_track_muted(const Project& project, Id arrangement, Id track
     delta.label = std::string(muted ? "Mute" : "Unmute") + " Track '" + t->name + "'";
     delta.origin = origin;
     delta.ops.push_back(make_set<bool>(
-        [arrangement, track](Project& p) {
+        [arrangement, track](MusicalContent& p) {
             return track_or_throw(p, arrangement, track).muted;
         },
-        [arrangement, track](Project& p, bool v) {
+        [arrangement, track](MusicalContent& p, bool v) {
             track_or_throw(p, arrangement, track).muted = v;
         },
         muted));
     return Expected<Delta>::success(std::move(delta));
 }
 
-Expected<CreatedDelta> add_placement(const Project& project, Id arrangement, Id track,
+Expected<CreatedDelta> add_placement(const MusicalContent& content, Id arrangement, Id track,
                                      Id pattern, Ticks start, Ticks length,
                                      Origin origin) {
-    const Arrangement* a = find_arrangement(project, arrangement);
+    const Arrangement* a = find_arrangement(content, arrangement);
     const Track* t = a ? find_track(*a, track) : nullptr;
     if (!t) return Expected<CreatedDelta>::failure("No such Track");
-    const Pattern* pat = project.patterns.find(pattern);
+    const Pattern* pat = content.patterns.find(pattern);
     if (!pat) return Expected<CreatedDelta>::failure("No such Pattern");
     if (start < 0) return Expected<CreatedDelta>::failure("Placement start before zero");
     if (length < 0) return Expected<CreatedDelta>::failure("Placement length below zero");
@@ -219,7 +219,7 @@ Expected<CreatedDelta> add_placement(const Project& project, Id arrangement, Id 
     placement.length = length == 0 ? pat->length : length;
 
     Delta delta;
-    delta.label = "Place " + pattern_label(project, pattern) + " on '" + t->name + "'";
+    delta.label = "Place " + pattern_label(content, pattern) + " on '" + t->name + "'";
     delta.origin = origin;
     Id id = placement.id;
     delta.ops.push_back(
@@ -227,10 +227,10 @@ Expected<CreatedDelta> add_placement(const Project& project, Id arrangement, Id 
     return Expected<CreatedDelta>::success({std::move(delta), id});
 }
 
-Expected<Delta> move_placement(const Project& project, Id arrangement, Id track,
+Expected<Delta> move_placement(const MusicalContent& content, Id arrangement, Id track,
                                Id placement, Ticks new_start, Id to_track,
                                Origin origin) {
-    const Arrangement* a = find_arrangement(project, arrangement);
+    const Arrangement* a = find_arrangement(content, arrangement);
     const Track* from = a ? find_track(*a, track) : nullptr;
     if (!from) return Expected<Delta>::failure("No such Track");
     const Placement* pl = find_placement(*from, placement);
@@ -240,16 +240,16 @@ Expected<Delta> move_placement(const Project& project, Id arrangement, Id track,
     if (new_start < 0) return Expected<Delta>::failure("Placement start before zero");
 
     Delta delta;
-    delta.label = "Move " + pattern_label(project, pl->pattern);
+    delta.label = "Move " + pattern_label(content, pl->pattern);
     delta.origin = origin;
 
     if (track == to_track) {
         delta.ops.push_back(make_set<Ticks>(
-            [arrangement, track, placement](Project& p) {
+            [arrangement, track, placement](MusicalContent& p) {
                 Track& t = track_or_throw(p, arrangement, track);
                 return placement_or_throw(t, placement).start;
             },
-            [arrangement, track, placement](Project& p, Ticks v) {
+            [arrangement, track, placement](MusicalContent& p, Ticks v) {
                 Track& t = track_or_throw(p, arrangement, track);
                 placement_or_throw(t, placement).start = v;
             },
@@ -266,9 +266,9 @@ Expected<Delta> move_placement(const Project& project, Id arrangement, Id track,
     return Expected<Delta>::success(std::move(delta));
 }
 
-Expected<Delta> resize_placement(const Project& project, Id arrangement, Id track,
+Expected<Delta> resize_placement(const MusicalContent& content, Id arrangement, Id track,
                                  Id placement, Ticks new_length, Origin origin) {
-    const Arrangement* a = find_arrangement(project, arrangement);
+    const Arrangement* a = find_arrangement(content, arrangement);
     const Track* t = a ? find_track(*a, track) : nullptr;
     if (!t) return Expected<Delta>::failure("No such Track");
     const Placement* pl = find_placement(*t, placement);
@@ -276,14 +276,14 @@ Expected<Delta> resize_placement(const Project& project, Id arrangement, Id trac
     if (new_length <= 0) return Expected<Delta>::failure("Placement length must be positive");
 
     Delta delta;
-    delta.label = "Resize " + pattern_label(project, pl->pattern);
+    delta.label = "Resize " + pattern_label(content, pl->pattern);
     delta.origin = origin;
     delta.ops.push_back(make_set<Ticks>(
-        [arrangement, track, placement](Project& p) {
+        [arrangement, track, placement](MusicalContent& p) {
             Track& tr = track_or_throw(p, arrangement, track);
             return placement_or_throw(tr, placement).length;
         },
-        [arrangement, track, placement](Project& p, Ticks v) {
+        [arrangement, track, placement](MusicalContent& p, Ticks v) {
             Track& tr = track_or_throw(p, arrangement, track);
             placement_or_throw(tr, placement).length = v;
         },
@@ -291,16 +291,16 @@ Expected<Delta> resize_placement(const Project& project, Id arrangement, Id trac
     return Expected<Delta>::success(std::move(delta));
 }
 
-Expected<Delta> remove_placement(const Project& project, Id arrangement, Id track,
+Expected<Delta> remove_placement(const MusicalContent& content, Id arrangement, Id track,
                                  Id placement, Origin origin) {
-    const Arrangement* a = find_arrangement(project, arrangement);
+    const Arrangement* a = find_arrangement(content, arrangement);
     const Track* t = a ? find_track(*a, track) : nullptr;
     if (!t) return Expected<Delta>::failure("No such Track");
     const Placement* pl = find_placement(*t, placement);
     if (!pl) return Expected<Delta>::failure("No such Placement");
 
     Delta delta;
-    delta.label = "Remove " + pattern_label(project, pl->pattern) + " from '" + t->name + "'";
+    delta.label = "Remove " + pattern_label(content, pl->pattern) + " from '" + t->name + "'";
     delta.origin = origin;
     delta.ops.push_back(remove_placement_op(arrangement, track, placement));
     return Expected<Delta>::success(std::move(delta));
