@@ -5,6 +5,7 @@
 - **Issue:** #6 — Design the Function surface and Function file generation
 - **Decided by:** Architect agent
 - **Supersedes:** nothing
+- **Amended by:** [`ADR-060`](ADR-060-musical-content-root.md) — D2's `MusicalContent` now exists in `src/core`, and obligation O-5.1 is discharged. See *Amendments*.
 - **Specification:** [`docs/specs/function-surface.md`](../specs/function-surface.md) — the 43-Function catalogue, the builder contract and the two worked traces live there
 - **Constrains:** issues #4, #5, #7, #16, #17, #19 (obligations table, spec §8)
 
@@ -217,9 +218,29 @@ each is `mutate_project(json)` smuggled through a parameter.
 - **43 Functions is a lot of schema to emit per request.** Deliberate — it is what §3.8 asks for —
   but it is a real token cost per turn, and one worth measuring once #4 picks a provider.
 - Six issues acquire obligations (spec §8). #5 in particular must make the `MusicalContent` split
-  structural rather than a naming convention, or D2 is not true.
+  structural rather than a naming convention, or D2 is not true. *(Done, late: ADR-060, issue #60 —
+  see Amendments.)*
 - No implementation exists yet, so `improve-codebase-architecture` had nothing to scan. Its
   vocabulary — depth, seam, adapter, the deletion test — is what the design above is argued in.
+
+## Amendments
+
+### ADR-060 (issue #60) — D2 is now true in the code
+
+D2 said every Function receives exactly one object, `MusicalContent`, and that there is nothing to
+reach through. Until issue #60 that was a claim about a type which did not exist: issue #5 closed
+without discharging **O-5.1**, and every Function in `src/core` took the whole `Project`. The rule
+held only because `Project` happened to contain nothing else yet.
+
+ADR-060 discharges the obligation. `core::MusicalContent` and `core::ProjectMeta` exist, every
+Function takes `const MusicalContent&`, and `Op` and `apply_delta` are typed on it too — so a
+Function's Deltas cannot reach further than the Function itself can see. D2's argument is unchanged;
+it is now checkable, by a compile-time census, per-Function `static_assert`s, and a lint that covers
+Functions nobody has written yet.
+
+Two details of §1's diagram were corrected in the spec at the same time: view state is not in the
+Project at all (it never was in the data model), and `meta` holds no provenance index, because
+whether a Project contains AI content is computed and never stored.
 
 ## Open items — require the project owner
 
