@@ -60,4 +60,8 @@ if(Python3_FOUND)
   add_test(NAME identifier_lint
            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/identifier_lint.py
                    ${CMAKE_SOURCE_DIR}/src)
+  # The workflow dispatcher. Skips itself (exit 77) where PyYAML is not installed.
+  add_test(NAME dispatcher_tests
+           COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_dispatcher.py)
+  set_tests_properties(dispatcher_tests PROPERTIES SKIP_RETURN_CODE 77)
 endif()
