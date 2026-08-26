@@ -206,7 +206,7 @@ std::optional<core::Id> SampleBrowser::selected() const {
 
 const core::Sample* SampleBrowser::sample_at(QListWidgetItem* item) const {
     if (!item) return nullptr;
-    const auto& samples = history_.read().samples.items;
+    const auto& samples = history_.read().musical.samples.items;
     int index = item->data(Qt::UserRole).toInt();
     if (index < 0 || index >= static_cast<int>(samples.size())) return nullptr;
     return &samples[static_cast<std::size_t>(index)];
@@ -216,7 +216,7 @@ void SampleBrowser::reload() {
     std::optional<core::Id> keep = selected();
     list_->clear();
     QString needle = filter_->text().trimmed();
-    const auto& samples = history_.read().samples.items;
+    const auto& samples = history_.read().musical.samples.items;
     for (std::size_t i = 0; i < samples.size(); ++i) {
         const core::Sample& sample = samples[i];
         QString name = QString::fromStdString(sample.name);
@@ -242,7 +242,7 @@ void SampleBrowser::reload() {
 
 void SampleBrowser::rebuild_place_menu() {
     place_menu_->clear();
-    for (const core::Pattern& pattern : history_.read().patterns.items) {
+    for (const core::Pattern& pattern : history_.read().musical.patterns.items) {
         core::Id id = pattern.id;
         place_menu_->addAction(QString::fromStdString(pattern.name), this,
                                [this, id] { place_selected_in(id); });
@@ -268,9 +268,9 @@ void SampleBrowser::place_selected_in(core::Id pattern) {
     using namespace core::functions;
     std::optional<core::Id> sample_id = selected();
     if (!sample_id) return;
-    const core::Project& project = history_.read();
-    const core::Sample* sample = project.samples.find(*sample_id);
-    const core::Pattern* pat = project.patterns.find(pattern);
+    const core::MusicalContent& content = history_.read().musical;
+    const core::Sample* sample = content.samples.find(*sample_id);
+    const core::Pattern* pat = content.patterns.find(pattern);
     if (!sample || !pat) {
         emit hint_changed("That Sample or Pattern is no longer in the Project.");
         return;
@@ -279,7 +279,7 @@ void SampleBrowser::place_selected_in(core::Id pattern) {
     // Reuse the Instrument already playing this Sample; a Pattern lane is
     // per Instrument, so placing the same Sample twice would be the same lane.
     std::optional<core::Id> instrument;
-    for (const core::Instrument& inst : project.instruments.items) {
+    for (const core::Instrument& inst : content.instruments.items) {
         if (inst.params.sample == *sample_id) {
             instrument = inst.id;
             break;
@@ -298,7 +298,7 @@ void SampleBrowser::place_selected_in(core::Id pattern) {
 
     history_.begin_gesture("Place '" + sample->name + "' in '" + pat->name + "'");
     if (!instrument) {
-        auto created = create_instrument(history_.read(), sample->name, *sample_id,
+        auto created = create_instrument(history_.read().musical, sample->name, *sample_id,
                                          core::SamplerMode::OneShot);
         if (created.ok() && history_.apply(std::move(created->delta)) == core::ApplyResult::Applied) {
             instrument = created->id;
@@ -306,7 +306,7 @@ void SampleBrowser::place_selected_in(core::Id pattern) {
     }
     QString hint;
     if (instrument) {
-        auto added = add_part(history_.read(), pattern, *instrument);
+        auto added = add_part(history_.read().musical, pattern, *instrument);
         if (added.ok()) {
             history_.apply(std::move(added->delta));
             hint = QString("Placed '%1' in '%2'.")

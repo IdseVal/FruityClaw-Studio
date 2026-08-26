@@ -36,9 +36,9 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "No audio output available; running silent.\n");
     }
 
-    player.publish(history.read(), session.sample_rate());
+    player.publish(history.read().musical, session.sample_rate());
     history.observe([&history, &player, &session] {
-        player.publish(history.read(), session.sample_rate());
+        player.publish(history.read().musical, session.sample_rate());
     });
 
     assistant::FunctionToggles toggles = app::load_toggles();

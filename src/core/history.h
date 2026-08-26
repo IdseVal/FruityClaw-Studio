@@ -1,5 +1,5 @@
 // ProjectHistory — the module that owns the Project and the only thing that
-// mutates it.
+// mutates its musical content.
 // Contract: docs/specs/history-contract.md (linear, Word-style discard on
 // branch) and docs/specs/project-data-model.md section 5.1.
 //
@@ -32,7 +32,8 @@ class ProjectHistory {
 public:
     explicit ProjectHistory(Project initial);
 
-    // The only read surface. Callers outside core hold const views only.
+    // The only read surface. Callers outside core hold const views only;
+    // the musical content is `read().musical`.
     const Project& read() const { return project_; }
 
     // Applies one Delta. Contract section 5.3: a no-op is not recorded and
@@ -88,7 +89,7 @@ private:
 
     struct Gesture {
         std::string label;
-        Project snapshot;
+        MusicalContent snapshot;  // Deltas reach nothing else (ADR-060)
         std::size_t first_entry;
     };
     std::optional<Gesture> gesture_;

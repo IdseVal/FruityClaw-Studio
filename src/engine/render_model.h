@@ -45,10 +45,13 @@ struct RenderModel {
     std::vector<Trigger> triggers;  // sorted by sample_pos
 };
 
-// Bakes the first Arrangement of the Project. Muted Tracks, muted Placements
+// Bakes the first Arrangement. Muted Tracks, muted Placements
 // and muted Parts are silent by omission. A Placement longer than its Pattern
 // loops it to fill; shorter trims it: events starting at or past the
 // Placement's end are dropped and a Sustain gate never crosses it.
-std::shared_ptr<const RenderModel> bake(const core::Project& project, double sample_rate);
+// The renderer consumes exactly `MusicalContent` and nothing else, which is
+// what makes that type's membership test decidable: a field belongs in the
+// musical content iff changing it changes what this function produces.
+std::shared_ptr<const RenderModel> bake(const core::MusicalContent& content, double sample_rate);
 
 }  // namespace engine

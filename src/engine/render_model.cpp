@@ -5,23 +5,23 @@
 
 namespace engine {
 
-std::shared_ptr<const RenderModel> bake(const core::Project& project, double sample_rate) {
+std::shared_ptr<const RenderModel> bake(const core::MusicalContent& content, double sample_rate) {
     auto model = std::make_shared<RenderModel>();
     model->sample_rate = sample_rate;
     model->samples_per_tick =
-        sample_rate * 60.0 / (project.tempo * static_cast<double>(core::kPpq));
+        sample_rate * 60.0 / (content.tempo * static_cast<double>(core::kPpq));
 
-    if (project.arrangements.items.empty()) return model;
-    const core::Arrangement& arrangement = project.arrangements.items.front();
+    if (content.arrangements.items.empty()) return model;
+    const core::Arrangement& arrangement = content.arrangements.items.front();
 
     // Instruments referenced by played Parts, deduplicated by Id.
     std::unordered_map<core::Id, std::uint32_t> instrument_index;
     auto baked_instrument = [&](core::Id id) -> std::int64_t {
         if (auto it = instrument_index.find(id); it != instrument_index.end())
             return it->second;
-        const core::Instrument* instrument = project.instruments.find(id);
+        const core::Instrument* instrument = content.instruments.find(id);
         if (!instrument) return -1;
-        const core::Sample* sample = project.samples.find(instrument->params.sample);
+        const core::Sample* sample = content.samples.find(instrument->params.sample);
         if (!sample || !sample->source) return -1;
 
         BakedInstrument baked;
@@ -34,7 +34,7 @@ std::shared_ptr<const RenderModel> bake(const core::Project& project, double sam
         // Sample's own rate and the Project tempo.
         double sample_frames_per_tick =
             sample->source->sample_rate * 60.0 /
-            (project.tempo * static_cast<double>(core::kPpq));
+            (content.tempo * static_cast<double>(core::kPpq));
         baked.start_frame = static_cast<std::int64_t>(
             static_cast<double>(instrument->params.start_offset) * sample_frames_per_tick);
         baked.end_frame = static_cast<std::int64_t>(
@@ -50,7 +50,7 @@ std::shared_ptr<const RenderModel> bake(const core::Project& project, double sam
         if (track.muted) continue;
         for (const core::Placement& placement : track.placements) {
             if (placement.muted || placement.length <= 0) continue;
-            const core::Pattern* pattern = project.patterns.find(placement.pattern);
+            const core::Pattern* pattern = content.patterns.find(placement.pattern);
             if (!pattern || pattern->length <= 0) continue;
 
             for (core::Ticks loop_start = 0; loop_start < placement.length;

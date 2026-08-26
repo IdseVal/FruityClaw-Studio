@@ -10,9 +10,9 @@ ProjectHistory::ProjectHistory(Project initial) : project_(std::move(initial)) {
 ApplyResult ProjectHistory::apply(Delta delta) {
     Delta inverse;
     try {
-        inverse = apply_delta(project_, delta);
+        inverse = apply_delta(project_.musical, delta);
     } catch (const OpError&) {
-        // apply_delta rolled back; History and Project are unchanged and the
+        // apply_delta rolled back; History and content are unchanged and the
         // future survives (contract section 5.3 rule 3).
         return ApplyResult::Failed;
     }
@@ -43,7 +43,7 @@ bool ProjectHistory::undo() {
     assert(!gesture_ && "undo during a gesture is a programming error");
     if (cursor_ == 0) return false;
     Entry& entry = entries_[cursor_ - 1];
-    Delta forward = apply_delta(project_, entry.delta);
+    Delta forward = apply_delta(project_.musical, entry.delta);
     entry.delta = std::move(forward);
     --cursor_;
     notify();
@@ -54,7 +54,7 @@ bool ProjectHistory::redo() {
     assert(!gesture_ && "redo during a gesture is a programming error");
     if (cursor_ == entries_.size()) return false;
     Entry& entry = entries_[cursor_];
-    Delta inverse = apply_delta(project_, entry.delta);
+    Delta inverse = apply_delta(project_.musical, entry.delta);
     entry.delta = std::move(inverse);
     entry.bytes = entry.delta.size_hint();
     ++cursor_;
@@ -64,7 +64,7 @@ bool ProjectHistory::redo() {
 
 void ProjectHistory::begin_gesture(std::string label) {
     assert(!gesture_ && "gestures do not nest");
-    gesture_ = Gesture{std::move(label), project_, entries_.size()};
+    gesture_ = Gesture{std::move(label), project_.musical, entries_.size()};
 }
 
 void ProjectHistory::end_gesture() {
@@ -74,8 +74,8 @@ void ProjectHistory::end_gesture() {
 
     if (entries_.size() <= gesture.first_entry) return;  // nothing applied
 
-    if (project_ == gesture.snapshot) {
-        // Net no-change: drop the entries; the Project is already back where
+    if (project_.musical == gesture.snapshot) {
+        // Net no-change: drop the entries; the content is already back where
         // it started, so their inverses restore nothing (contract section 6).
         entries_.resize(gesture.first_entry);
         cursor_ = entries_.size();

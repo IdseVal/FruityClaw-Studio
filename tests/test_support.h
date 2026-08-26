@@ -36,12 +36,12 @@ struct Fixture {
 inline Fixture make_fixture() {
     using namespace core;
     Fixture f;
-    f.project.title = "Test";
-    f.project.tempo = 120.0;
+    f.project.meta.title = "Test";
+    f.project.musical.tempo = 120.0;
 
     Sample drum_hit{new_id(), "hit", make_tone(0.1, 100.0), Provenance::human()};
     Sample tone{new_id(), "tone", make_tone(0.5, 220.0), Provenance::human()};
-    f.project.samples.items = {drum_hit, tone};
+    f.project.musical.samples.items = {drum_hit, tone};
 
     Instrument drum;
     drum.id = new_id();
@@ -55,7 +55,7 @@ inline Fixture make_fixture() {
     keys.params.sample = tone.id;
     keys.params.mode = SamplerMode::Sustain;
     keys.params.root_pitch = 57;  // the tone is A3
-    f.project.instruments.items = {drum, keys};
+    f.project.musical.instruments.items = {drum, keys};
 
     Pattern drums;
     drums.id = new_id();
@@ -80,14 +80,14 @@ inline Fixture make_fixture() {
     melody_part.events.push_back(Event{new_id(), 0, 2 * kPpq, 57, 100});
     melody_part.events.push_back(Event{new_id(), 2 * kPpq, 2 * kPpq, 64, 90});
     melody.parts.push_back(melody_part);
-    f.project.patterns.items = {drums, melody};
+    f.project.musical.patterns.items = {drums, melody};
 
     Arrangement arrangement;
     arrangement.id = new_id();
     arrangement.name = "Arrangement";
     arrangement.tracks.push_back(Track{new_id(), "Track 1", {}, false, {}});
     arrangement.tracks.push_back(Track{new_id(), "Track 2", {}, false, {}});
-    f.project.arrangements.items = {arrangement};
+    f.project.musical.arrangements.items = {arrangement};
 
     f.arrangement = arrangement.id;
     f.track_a = arrangement.tracks[0].id;

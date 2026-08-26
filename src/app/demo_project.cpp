@@ -87,14 +87,14 @@ Event note(Ticks start, Ticks duration, Pitch pitch, Velocity velocity = 96) {
 core::Project make_demo_project() {
     using namespace core;
     Project project;
-    project.title = "Demo";
-    project.tempo = 112.0;
+    project.meta.title = "Demo";
+    project.musical.tempo = 112.0;
 
     Sample kick{new_id(), "Kick", make_kick(), Provenance::human()};
     Sample snare{new_id(), "Snare", make_snare(), Provenance::human()};
     Sample hat{new_id(), "Hat", make_hat(), Provenance::human()};
     Sample pluck{new_id(), "Pluck", make_pluck(), Provenance::human()};
-    project.samples.items = {kick, snare, hat, pluck};
+    project.musical.samples.items = {kick, snare, hat, pluck};
 
     auto drum_instrument = [](const std::string& name, Id sample, float gain) {
         Instrument instrument;
@@ -116,7 +116,7 @@ core::Project make_demo_project() {
     keys.params.mode = SamplerMode::Sustain;
     keys.params.root_pitch = 48;  // the rendered tone is C3
     keys.params.gain = 0.65f;
-    project.instruments.items = {kick_instrument, snare_instrument, hat_instrument, keys};
+    project.musical.instruments.items = {kick_instrument, snare_instrument, hat_instrument, keys};
 
     // --- drum Patterns: step-sequencer material (16 sixteenths per bar) -----
     Pattern drums_a;
@@ -171,7 +171,7 @@ core::Project make_demo_project() {
     };
     lead.parts = {lead_part};
 
-    project.patterns.items = {drums_a, drums_b, bass, lead};
+    project.musical.patterns.items = {drums_a, drums_b, bass, lead};
 
     // --- one Arrangement, three empty Tracks ready to place onto ------------
     Arrangement arrangement;
@@ -182,7 +182,7 @@ core::Project make_demo_project() {
         Track{new_id(), "Bass", {}, false, {}},
         Track{new_id(), "Lead", {}, false, {}},
     };
-    project.arrangements.items = {arrangement};
+    project.musical.arrangements.items = {arrangement};
 
     return project;
 }

@@ -3,9 +3,13 @@
 // and reference direction follow that document exactly; deviations are defects.
 //
 // Entities are plain data. The mutation discipline of section 5 — no public
-// mutators, ProjectHistory::apply as the only door — is enforced by module
-// convention: everything outside core receives `const Project&` and every write
-// path goes through core::ProjectHistory (history.h).
+// mutators, ProjectHistory::apply as the only door to the musical content —
+// is enforced by module convention: everything outside core reads through
+// `const Project&` and every write path goes through core::ProjectHistory
+// (history.h).
+//
+// The Project splits in two (ADR-060): `MusicalContent`, which is everything
+// a Function may reach, and `ProjectMeta`, which is everything it may not.
 #pragma once
 
 #include <map>
@@ -210,11 +214,20 @@ struct OrderedMap {
     bool operator==(const OrderedMap&) const = default;
 };
 
-struct Project {
-    Id id;
-    int format_version = 1;  // numeric only, never a branded string
-    std::string title;       // the user's title for their work
-    double tempo = 120.0;    // BPM, constant for the whole Project in the MVP
+// The musical content of a Project: the material that determines what the
+// Project sounds like (contract section 3.1.2). **This is the only object a
+// Function ever receives** — the reach rule of docs/specs/function-surface.md
+// section 1 is this type declaration, not a check somebody runs.
+//
+// Membership test, so the boundary is decidable rather than a matter of
+// taste: a field belongs here iff changing it changes what `engine::bake`
+// produces. Tempo does. A file path does not.
+//
+// Adding a field here widens what the Assistant can reach. That is a
+// deliberate, reviewable act: tests/test_reach_rule.cpp destructures this
+// struct member by member and stops compiling when the list changes.
+struct MusicalContent {
+    double tempo = 120.0;  // BPM, constant for the whole Project in the MVP
     std::pair<int, int> time_signature{4, 4};
 
     OrderedMap<Sample> samples;
@@ -222,6 +235,35 @@ struct Project {
     OrderedMap<Pattern> patterns;
     OrderedMap<Arrangement> arrangements;  // exactly one entry in the MVP
     std::vector<Effect> master_chain;
+
+    bool operator==(const MusicalContent&) const = default;
+};
+
+// What the Project document is, as distinct from what it sounds like
+// (contract section 3.1.1). Unreachable from a Function by construction: no
+// reference to it exists in MusicalContent.
+//
+// This is where the document's non-musical state goes — the Project's file
+// path and save metadata among it (issue #13), if the module that owns
+// save and load wants it in the document at all. Nothing put here becomes
+// visible to a Function, and no Function signature changes when it arrives.
+struct ProjectMeta {
+    Id id;
+    int format_version = 1;  // numeric only, never a branded string
+    std::string title;       // the user's title for their work
+
+    bool operator==(const ProjectMeta&) const = default;
+};
+
+// The open document: its identity, and its musical content. The split is
+// structural, not a naming convention — see ADR-060.
+//
+// View state (zoom, scroll, selection, panel layout) is in neither half. It
+// is not in the Project at all (contract section 3.11) and lives in the
+// widgets that own it.
+struct Project {
+    ProjectMeta meta;
+    MusicalContent musical;
 
     bool operator==(const Project&) const = default;
 };

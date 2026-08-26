@@ -34,7 +34,7 @@ public:
 
     // Edit thread. Bakes and publishes; the audio thread picks the new model
     // up at its next block. Also reclaims models the audio thread has left.
-    void publish(const core::Project& project, double sample_rate);
+    void publish(const core::MusicalContent& content, double sample_rate);
 
     // Audio thread. Renders `frames` samples into non-interleaved planar
     // output. Callable directly from tests for offline rendering.

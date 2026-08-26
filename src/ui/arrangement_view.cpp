@@ -73,14 +73,14 @@ ArrangementView::ArrangementView(core::ProjectHistory& history,
 // geometry
 
 const core::Arrangement* ArrangementView::arrangement() const {
-    const auto& items = history_.read().arrangements.items;
+    const auto& items = history_.read().musical.arrangements.items;
     return items.empty() ? nullptr : &items.front();
 }
 
 core::Ticks ArrangementView::beat_ticks() const { return core::kPpq; }
 
 core::Ticks ArrangementView::bar_ticks() const {
-    return static_cast<core::Ticks>(history_.read().time_signature.first) * core::kPpq;
+    return static_cast<core::Ticks>(history_.read().musical.time_signature.first) * core::kPpq;
 }
 
 int ArrangementView::tick_to_x(core::Ticks tick) const {
@@ -218,7 +218,7 @@ void ArrangementView::paint_ruler(QPainter& painter) {
 void ArrangementView::paint_tracks(QPainter& painter) {
     const core::Arrangement* a = arrangement();
     if (!a) return;
-    const core::Project& project = history_.read();
+    const core::MusicalContent& content = history_.read().musical;
 
     for (int i = 0; i < static_cast<int>(a->tracks.size()); ++i) {
         const core::Track& track = a->tracks[static_cast<std::size_t>(i)];
@@ -232,10 +232,10 @@ void ArrangementView::paint_tracks(QPainter& painter) {
 
         // Placements, dimmed on a muted Track.
         for (const core::Placement& placement : track.placements) {
-            const core::Pattern* pattern = project.patterns.find(placement.pattern);
+            const core::Pattern* pattern = content.patterns.find(placement.pattern);
             int pattern_index = 0;
-            for (std::size_t p = 0; p < project.patterns.items.size(); ++p) {
-                if (pattern && project.patterns.items[p].id == pattern->id) {
+            for (std::size_t p = 0; p < content.patterns.items.size(); ++p) {
+                if (pattern && content.patterns.items[p].id == pattern->id) {
                     pattern_index = static_cast<int>(p);
                     break;
                 }
@@ -289,7 +289,7 @@ void ArrangementView::paint_tracks(QPainter& painter) {
         for (const core::Track& track : a->tracks) {
             for (const core::Placement& placement : track.placements) {
                 if (placement.id == drag_target_->placement) {
-                    pattern = project.patterns.find(placement.pattern);
+                    pattern = content.patterns.find(placement.pattern);
                 }
             }
         }
@@ -404,7 +404,7 @@ void ArrangementView::mousePressEvent(QMouseEvent* event) {
     if (add_track_rect().contains(pos)) {
         const core::Arrangement* a = arrangement();
         if (a) {
-            auto created = create_track(history_.read(), a->id,
+            auto created = create_track(history_.read().musical, a->id,
                                         "Track " + std::to_string(a->tracks.size() + 1),
                                         std::nullopt);
             if (created.ok()) history_.apply(std::move(created->delta));
@@ -420,7 +420,7 @@ void ArrangementView::mousePressEvent(QMouseEvent* event) {
         QRect header = track_header_rect(index);
         QRect dot(header.right() - 26, header.top(), 26, header.height());
         if (dot.contains(pos)) {
-            apply_or_hint(set_track_muted(history_.read(), a->id, track.id, !track.muted));
+            apply_or_hint(set_track_muted(history_.read().musical, a->id, track.id, !track.muted));
         }
         return;
     }
@@ -460,7 +460,7 @@ void ArrangementView::mousePressEvent(QMouseEvent* event) {
         const core::Track& track = a->tracks[static_cast<std::size_t>(index)];
         core::Ticks start = snap(x_to_tick(pos.x()), bar_ticks());
         auto placed =
-            add_placement(history_.read(), a->id, track.id, *armed_pattern_, start);
+            add_placement(history_.read().musical, a->id, track.id, *armed_pattern_, start);
         if (placed.ok()) {
             history_.apply(std::move(placed->delta));
             selected_ = PlacementRef{track.id, placed->id};
@@ -535,13 +535,13 @@ void ArrangementView::mouseReleaseEvent(QMouseEvent* event) {
     if (mode == DragMode::Move) {
         core::Id to_track = a->tracks[static_cast<std::size_t>(drag_preview_track_)].id;
         if (drag_preview_start_ != drag_start_tick_ || to_track != drag_target_->track) {
-            apply_or_hint(move_placement(history_.read(), a->id, drag_target_->track,
+            apply_or_hint(move_placement(history_.read().musical, a->id, drag_target_->track,
                                          drag_target_->placement, drag_preview_start_,
                                          to_track));
             selected_ = PlacementRef{to_track, drag_target_->placement};
         }
     } else if (drag_preview_length_ != drag_length_) {
-        apply_or_hint(resize_placement(history_.read(), a->id, drag_target_->track,
+        apply_or_hint(resize_placement(history_.read().musical, a->id, drag_target_->track,
                                        drag_target_->placement, drag_preview_length_));
     }
     drag_target_.reset();
@@ -567,7 +567,7 @@ void ArrangementView::contextMenuEvent(QContextMenuEvent* event) {
         QAction* remove = menu.addAction("Remove");
         if (menu.exec(event->globalPos()) == remove) {
             apply_or_hint(
-                remove_placement(history_.read(), a->id, hit->track, hit->placement));
+                remove_placement(history_.read().musical, a->id, hit->track, hit->placement));
             if (selected_ == hit) selected_.reset();
         }
         return;
@@ -583,7 +583,7 @@ void ArrangementView::contextMenuEvent(QContextMenuEvent* event) {
         if (chosen == rename) {
             begin_rename(index);
         } else if (chosen == remove) {
-            apply_or_hint(delete_track(history_.read(), a->id, track.id));
+            apply_or_hint(delete_track(history_.read().musical, a->id, track.id));
         }
     }
 }
@@ -592,7 +592,7 @@ void ArrangementView::keyPressEvent(QKeyEvent* event) {
     const core::Arrangement* a = arrangement();
     if (event->key() == Qt::Key_Delete || event->key() == Qt::Key_Backspace) {
         if (a && selected_) {
-            apply_or_hint(remove_placement(history_.read(), a->id, selected_->track,
+            apply_or_hint(remove_placement(history_.read().musical, a->id, selected_->track,
                                            selected_->placement));
             selected_.reset();
         }
@@ -688,7 +688,7 @@ void ArrangementView::commit_rename() {
     const core::Arrangement* a = arrangement();
     if (a && !name.isEmpty()) {
         apply_or_hint(
-            rename_track(history_.read(), a->id, rename_track_, name.toStdString()));
+            rename_track(history_.read().musical, a->id, rename_track_, name.toStdString()));
     }
     update();
 }

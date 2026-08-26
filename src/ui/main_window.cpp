@@ -223,15 +223,15 @@ void MainWindow::request_generation() {
 
 void MainWindow::refresh_transport() {
     core::PlaybackStatus status = transport_.status();
-    const core::Project& project = history_.read();
+    const core::MusicalContent& content = history_.read().musical;
     core::Ticks bar_len =
-        static_cast<core::Ticks>(project.time_signature.first) * core::kPpq;
+        static_cast<core::Ticks>(content.time_signature.first) * core::kPpq;
     long long bar = status.position / bar_len + 1;
     long long beat = status.position % bar_len / core::kPpq + 1;
     position_label_->setText(QString("  %1.%2  ")
                                  .arg(bar, 3, 10, QChar('0'))
                                  .arg(beat));
-    tempo_label_->setText(QString("%1 BPM").arg(project.tempo));
+    tempo_label_->setText(QString("%1 BPM").arg(content.tempo));
     play_button_->setText(status.playing ? "Stop" : "Play");
 }
 
