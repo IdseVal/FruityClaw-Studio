@@ -10,6 +10,7 @@ add_executable(core_tests
   test_history.cpp
   test_arrangement_functions.cpp
   test_sample_functions.cpp
+  test_reach_rule.cpp
   test_engine.cpp
   test_engine_stress.cpp
 )
@@ -36,9 +37,13 @@ if(TARGET ui)
 endif()
 
 # Invariant I10: no product name and no retired vocabulary in identifiers.
+# Invariant I11: a Function names nothing outside the musical content.
 find_package(Python3 COMPONENTS Interpreter)
 if(Python3_FOUND)
   add_test(NAME identifier_lint
            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/identifier_lint.py
+                   ${CMAKE_SOURCE_DIR}/src)
+  add_test(NAME reach_rule_lint
+           COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/reach_rule_lint.py
                    ${CMAKE_SOURCE_DIR}/src)
 endif()
