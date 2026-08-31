@@ -1,15 +1,19 @@
-"""Daily agent digest.
+"""Daily agent digest -- the workflow's ONE e-mail per day.
 
-Derived from commit and pull-request history rather than from agent-written logs. Agents
-forget, parallel worktrees conflict on a shared file, and a report assembled from
-self-description tells you what each agent believed — the very thing being checked.
+Derived from commit and pull-request history plus the live label state, never from
+agent-written logs. Agents forget, parallel worktrees conflict on a shared file, and a
+report assembled from self-description tells you what each agent believed -- the very
+thing being checked.
 
-Contract (see agent-workflow-setup.md section 13):
+Contract (see agent-workflow-setup.md section 11):
 
-* Sources: ``git log <branch> --since=<day> --until=<day+1> --no-merges`` and
-  ``gh pr list --base <branch> --state merged --json ...``.
-* Grouping: merged pull requests first, then commits grouped by author.
-* Quiet day: prints ``nothing landed`` and sends no mail.
+* Sources: ``git log <branch> --since=<day> --until=<day+1> --no-merges``,
+  ``gh pr list --base <branch> --state merged|all --json ...`` and
+  ``gh issue list --state open --json ...`` for the attention section.
+* Sections, in order: WAITING ON YOU (open items labelled needs-human / escalated /
+  proposed), pull requests opened today, pull requests merged today, commits by author.
+* Quiet day: nothing landed, nothing opened AND nothing waiting -> prints a line and
+  sends no mail. Anything waiting -> the mail is sent even on a silent day.
 * No credentials: prints the rendered HTML instead of sending.
 * Any missing tool, branch or auth degrades to "nothing from this source"; the script
   never exits non-zero.
@@ -42,6 +46,9 @@ RECORD_SEP = "\x1e"
 # git and gh are cheap; a 60s ceiling keeps the workflow from hanging on a broken remote.
 SUBPROCESS_TIMEOUT_SECONDS = 60
 
+# Open items carrying any of these labels appear under WAITING ON YOU.
+ATTENTION_LABELS = ("needs-human", "escalated", "proposed")
+
 
 @dataclass(frozen=True)
 class Commit:
@@ -54,21 +61,33 @@ class Commit:
 
 @dataclass(frozen=True)
 class PullRequest:
-    """One merged pull request, as reported by ``gh pr list``."""
+    """One pull request, as reported by ``gh pr list``."""
 
     number: int
     title: str
     author: str
     labels: tuple[str, ...]
     url: str
-    merged_at: str
+    stamp: str  # mergedAt for merged lists, createdAt for opened lists
+
+
+@dataclass(frozen=True)
+class Attention:
+    """An open issue or pull request that is waiting on the human."""
+
+    kind: str  # "issue" or "PR"
+    number: int
+    title: str
+    url: str
+    flags: tuple[str, ...]  # the attention labels it carries
 
 
 def parse_args() -> argparse.Namespace:
     """Parse the CLI. All arguments are optional; defaults match the workflow."""
 
     parser = argparse.ArgumentParser(
-        description="Daily agent digest, derived from git and merged pull requests.",
+        description="Daily agent digest: git history, pull requests, and open items "
+                    "waiting on the human.",
     )
     parser.add_argument(
         "--branch",
@@ -90,7 +109,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def resolve_day(day_arg: str) -> date:
-    """Return the day to report on. Bad input falls back to today rather than raising —
+    """Return the day to report on. Bad input falls back to today rather than raising --
     the workflow must never fail because someone typed a date wrong.
     """
 
@@ -135,6 +154,36 @@ def _run(argv: list[str]) -> tuple[bool, str]:
     return True, result.stdout
 
 
+def _gh_list(argv: list[str]) -> list[dict]:
+    """Run a gh listing command and parse its JSON. Empty list on any failure."""
+
+    ok, out = _run(argv)
+    if not ok or not out.strip():
+        return []
+    try:
+        parsed = json.loads(out)
+    except json.JSONDecodeError as exc:
+        print(f"!! gh returned unparseable JSON: {exc}", file=sys.stderr)
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
+def _parse_stamp(raw: str) -> datetime | None:
+    """Parse gh's ISO-8601 timestamps. Returns None if unparseable."""
+
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _window(day: date) -> tuple[datetime, datetime]:
+    start = datetime.combine(day, datetime.min.time(), tzinfo=timezone.utc)
+    return start, start + timedelta(days=1)
+
+
 def read_commits(branch: str, day: date) -> list[Commit]:
     """Return commits on ``branch`` for the UTC day given.
 
@@ -167,88 +216,162 @@ def read_commits(branch: str, day: date) -> list[Commit]:
         parts = record.split(UNIT_SEP)
         if len(parts) < 3:
             continue
-        # The subject can itself contain UNIT_SEP in the pathological case; rejoin the tail
-        # rather than dropping content.
+        # The subject can itself contain UNIT_SEP in the pathological case; rejoin the
+        # tail rather than dropping content.
         sha, author = parts[0], parts[1]
         subject = UNIT_SEP.join(parts[2:])
         commits.append(Commit(sha=sha, author=author, subject=subject))
     return commits
 
 
-def _parse_merged_at(raw: str) -> datetime | None:
-    """Parse gh's ISO-8601 ``mergedAt`` field. Returns None if unparseable."""
+def _pull_from_entry(entry: dict, stamp_field: str) -> PullRequest:
+    author_field = entry.get("author") or {}
+    author = author_field.get("login") or "unknown"
+    labels = tuple(
+        item.get("name", "")
+        for item in (entry.get("labels") or [])
+        if item.get("name")
+    )
+    return PullRequest(
+        number=int(entry.get("number", 0)),
+        title=entry.get("title", ""),
+        author=author,
+        labels=labels,
+        url=entry.get("url", "") or "",
+        stamp=entry.get(stamp_field) or "",
+    )
 
-    if not raw:
-        return None
-    try:
-        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
-    except ValueError:
-        return None
 
-
-def read_prs(branch: str, day: date) -> list[PullRequest]:
-    """Return pull requests merged into ``branch`` during the UTC day given.
+def read_merged_prs(branch: str, day: date) -> list[PullRequest]:
+    """Pull requests merged into ``branch`` during the UTC day given.
 
     gh has no ``--merged-on`` filter, so we list merged PRs and window-filter locally.
     """
 
-    ok, out = _run(
+    entries = _gh_list(
         [
-            "gh",
-            "pr",
-            "list",
-            "--base",
-            branch,
-            "--state",
-            "merged",
-            "--limit",
-            "200",
-            "--json",
-            "number,title,author,labels,mergedAt,url",
+            "gh", "pr", "list",
+            "--base", branch,
+            "--state", "merged",
+            "--limit", "200",
+            "--json", "number,title,author,labels,mergedAt,url",
         ]
     )
-    if not ok or not out.strip():
-        return []
-
-    try:
-        raw_entries = json.loads(out)
-    except json.JSONDecodeError as exc:
-        print(f"!! gh returned unparseable JSON: {exc}", file=sys.stderr)
-        return []
-
-    start = datetime.combine(day, datetime.min.time(), tzinfo=timezone.utc)
-    end = start + timedelta(days=1)
-
+    start, end = _window(day)
     prs: list[PullRequest] = []
-    for entry in raw_entries:
-        merged = _parse_merged_at(entry.get("mergedAt") or "")
+    for entry in entries:
+        merged = _parse_stamp(entry.get("mergedAt") or "")
         if merged is None or not (start <= merged < end):
             continue
-        author_field = entry.get("author") or {}
-        author = author_field.get("login") or "unknown"
-        labels = tuple(
-            item.get("name", "")
-            for item in (entry.get("labels") or [])
-            if item.get("name")
-        )
-        prs.append(
-            PullRequest(
+        prs.append(_pull_from_entry(entry, "mergedAt"))
+    prs.sort(key=lambda pull: pull.stamp)
+    return prs
+
+
+def read_opened_prs(branch: str, day: date) -> list[PullRequest]:
+    """Pull requests OPENED against ``branch`` during the UTC day given, whatever their
+    state now -- the reader wants to know work was published, not only that it landed."""
+
+    entries = _gh_list(
+        [
+            "gh", "pr", "list",
+            "--base", branch,
+            "--state", "all",
+            "--limit", "200",
+            "--json", "number,title,author,labels,createdAt,url",
+        ]
+    )
+    start, end = _window(day)
+    prs: list[PullRequest] = []
+    for entry in entries:
+        created = _parse_stamp(entry.get("createdAt") or "")
+        if created is None or not (start <= created < end):
+            continue
+        prs.append(_pull_from_entry(entry, "createdAt"))
+    prs.sort(key=lambda pull: pull.stamp)
+    return prs
+
+
+def read_attention(branch: str) -> list[Attention]:
+    """Every OPEN issue and pull request carrying an attention label, regardless of age.
+
+    This is the section that lets one mail a day be enough: a `needs-human` question,
+    an `escalated` issue or a `proposed` suggestion reappears every day until acted on.
+    """
+
+    items: list[Attention] = []
+
+    for entry in _gh_list(
+        [
+            "gh", "issue", "list",
+            "--state", "open",
+            "--limit", "200",
+            "--json", "number,title,labels,url",
+        ]
+    ):
+        names = {item.get("name", "") for item in (entry.get("labels") or [])}
+        flags = tuple(label for label in ATTENTION_LABELS if label in names)
+        if flags:
+            items.append(Attention(
+                kind="issue",
                 number=int(entry.get("number", 0)),
                 title=entry.get("title", ""),
-                author=author,
-                labels=labels,
-                url=entry.get("url", ""),
-                merged_at=entry.get("mergedAt") or "",
+                url=entry.get("url", "") or "",
+                flags=flags,
+            ))
+
+    for entry in _gh_list(
+        [
+            "gh", "pr", "list",
+            "--base", branch,
+            "--state", "open",
+            "--limit", "200",
+            "--json", "number,title,labels,url",
+        ]
+    ):
+        names = {item.get("name", "") for item in (entry.get("labels") or [])}
+        flags = tuple(label for label in ATTENTION_LABELS if label in names)
+        if flags:
+            items.append(Attention(
+                kind="PR",
+                number=int(entry.get("number", 0)),
+                title=entry.get("title", ""),
+                url=entry.get("url", "") or "",
+                flags=flags,
+            ))
+
+    # Questions before escalations before suggestions; then oldest number first.
+    order = {label: rank for rank, label in enumerate(ATTENTION_LABELS)}
+    items.sort(key=lambda a: (min(order[f] for f in a.flags), a.number))
+    return items
+
+
+def _pr_list_html(prs: list[PullRequest]) -> list[str]:
+    escape = html.escape
+    parts: list[str] = ["<ul>"]
+    for pull in prs:
+        label_html = ""
+        if pull.labels:
+            label_html = " " + " ".join(
+                f"<code>{escape(name)}</code>" for name in pull.labels
             )
+        title_html = escape(pull.title)
+        link_open = f'<a href="{escape(pull.url)}">' if pull.url else ""
+        link_close = "</a>" if pull.url else ""
+        parts.append(
+            f"<li>#{pull.number} {link_open}{title_html}{link_close}"
+            f" &mdash; {escape(pull.author)}{label_html}</li>"
         )
-    prs.sort(key=lambda pull: pull.merged_at)
-    return prs
+    parts.append("</ul>")
+    return parts
 
 
 def render_html(
     branch: str,
     day: date,
-    prs: list[PullRequest],
+    attention: list[Attention],
+    opened: list[PullRequest],
+    merged: list[PullRequest],
     commits: list[Commit],
 ) -> str:
     """Render the digest as HTML. Every value from git or gh is escaped."""
@@ -258,25 +381,37 @@ def render_html(
         f"<h1>Daily digest &mdash; {escape(branch)} &mdash; {day.isoformat()}</h1>",
     ]
 
-    parts.append("<h2>Merged pull requests</h2>")
-    if not prs:
-        parts.append("<p><em>none</em></p>")
+    parts.append("<h2>Waiting on you</h2>")
+    if not attention:
+        parts.append("<p><em>nothing -- the machine needs no answers today</em></p>")
     else:
         parts.append("<ul>")
-        for pull in prs:
-            label_html = ""
-            if pull.labels:
-                label_html = " " + " ".join(
-                    f"<code>{escape(name)}</code>" for name in pull.labels
-                )
-            title_html = escape(pull.title)
-            link_open = f'<a href="{escape(pull.url)}">' if pull.url else ""
-            link_close = "</a>" if pull.url else ""
+        for item in attention:
+            flags = " ".join(f"<code>{escape(flag)}</code>" for flag in item.flags)
+            link_open = f'<a href="{escape(item.url)}">' if item.url else ""
+            link_close = "</a>" if item.url else ""
             parts.append(
-                f"<li>#{pull.number} {link_open}{title_html}{link_close}"
-                f" &mdash; {escape(pull.author)}{label_html}</li>"
+                f"<li>{escape(item.kind)} #{item.number} {link_open}"
+                f"{escape(item.title)}{link_close} &mdash; {flags}</li>"
             )
         parts.append("</ul>")
+        parts.append(
+            "<p><em>Answer in the item's comments; remove the label when done. "
+            "A <code>proposed</code> item wants the <code>ready</code> label (or to be "
+            "closed).</em></p>"
+        )
+
+    parts.append("<h2>Pull requests opened</h2>")
+    if not opened:
+        parts.append("<p><em>none</em></p>")
+    else:
+        parts.extend(_pr_list_html(opened))
+
+    parts.append("<h2>Pull requests merged</h2>")
+    if not merged:
+        parts.append("<p><em>none</em></p>")
+    else:
+        parts.extend(_pr_list_html(merged))
 
     parts.append("<h2>Commits</h2>")
     if not commits:
@@ -313,7 +448,7 @@ def _smtp_config() -> dict[str, str] | None:
     return values
 
 
-def send_or_print(html_body: str, day: date, print_only: bool) -> None:
+def send_or_print(html_body: str, subject: str, print_only: bool) -> None:
     """Print the body when asked, when credentials are missing, or when SMTP fails.
 
     The script always leaves the reader with the digest somewhere they can see it; a mail
@@ -341,7 +476,7 @@ def send_or_print(html_body: str, day: date, print_only: bool) -> None:
         return
 
     message = MIMEText(html_body, "html", "utf-8")
-    message["Subject"] = f"Daily agent digest - {day.isoformat()}"
+    message["Subject"] = subject
     message["From"] = config["SMTP_SENDER_EMAIL"]
     message["To"] = config["SMTP_RECEIVER_EMAIL"]
 
@@ -363,15 +498,21 @@ def main() -> int:
 
     args = parse_args()
     day = resolve_day(args.day)
-    prs = read_prs(args.branch, day)
+    attention = read_attention(args.branch)
+    opened = read_opened_prs(args.branch, day)
+    merged = read_merged_prs(args.branch, day)
     commits = read_commits(args.branch, day)
 
-    if not prs and not commits:
-        print(f"nothing landed on {args.branch} on {day.isoformat()}")
+    if not attention and not opened and not merged and not commits:
+        print(f"nothing landed on {args.branch} on {day.isoformat()}, nothing waiting")
         return 0
 
-    body = render_html(args.branch, day, prs, commits)
-    send_or_print(body, day, args.print_only)
+    subject = f"Daily agent digest - {day.isoformat()}"
+    if attention:
+        subject += f" -- {len(attention)} item(s) waiting on you"
+
+    body = render_html(args.branch, day, attention, opened, merged, commits)
+    send_or_print(body, subject, args.print_only)
     return 0
 
 

@@ -12,7 +12,7 @@
     "source=${localEnv:PROJECT_DATA_HOST_DIR},target=/data,type=bind,readonly"
   ],
 
-  // No docker.sock. See "Isolation" above.
+  // No docker.sock. See "Isolation" in section 1.
 
   "remoteEnv": {
     "PROJECT_DATA_DIR": "/data"

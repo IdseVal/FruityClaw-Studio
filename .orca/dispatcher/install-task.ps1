@@ -7,6 +7,11 @@
   restart it if it dies, and never time it out. The dispatcher is then independent of any
   terminal or chat session. Logs go to .orca\dispatcher\dispatcher.log.
 
+  NOTE (v0.2): the dispatcher spawns `claude` itself. Scheduled tasks often run with a
+  minimal PATH; if `dispatch.py doctor` passes in your terminal but headless runs fail
+  from the task, set `dispatcher.claude_cmd` in .orca/dispatch.yml to the ABSOLUTE path
+  that `where claude` prints.
+
   Run from anywhere:   powershell -ExecutionPolicy Bypass -File .orca\dispatcher\install-task.ps1
   Remove:              ... install-task.ps1 -Uninstall
   Show:                ... install-task.ps1 -Status

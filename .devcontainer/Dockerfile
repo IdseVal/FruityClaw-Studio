@@ -1,11 +1,10 @@
-# The reproducible toolchain every agent runs inside.
+# The reproducible toolchain for tests and builds.
 #
 # It pins the toolchain so a test that passes here passes on any machine, and it is the shape
 # the project deploys in later. It is NOT a sandbox: the container is not a security boundary.
 #
-# Orca is not installed. It is a desktop application on the host that dispatches agents and
-# owns the worktrees; it cannot live inside the environment it dispatches into, and it is not
-# published to npm at all.
+# Orca is not installed. It is a desktop application on the host that owns the worktrees; it
+# cannot live inside the environment it manages, and it is not published to npm at all.
 
 FROM mcr.microsoft.com/devcontainers/typescript-node:1-22-bookworm
 

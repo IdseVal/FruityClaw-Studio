@@ -2,7 +2,10 @@ name: Daily agent digest
 
 on:
   schedule:
-    - cron: '10 18 * * *'      # off the hour: GitHub queues the hour heavily
+    # GitHub cron runs in UTC. 16:05 UTC = 18:05 Amsterdam in summer, 17:05 in winter;
+    # swap 16 <-> 17 at the clock changes if the winter hour bothers you. Off the hour
+    # on purpose: GitHub queues the hour itself heavily.
+    - cron: '5 16 * * *'
   workflow_dispatch:
     inputs:
       day:
@@ -21,6 +24,7 @@ concurrency:
 permissions:
   contents: read
   pull-requests: read
+  issues: read
 
 jobs:
   digest:

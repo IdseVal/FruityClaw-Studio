@@ -1,51 +1,50 @@
-version: 2
+version: 3
 
 branches:
   base: dev
   protected: [main]          # no agent may merge into these; the human opens dev -> main
 
-# The dispatcher process (.orca/dispatcher/dispatch.py) reads this block.
+# THE AUTONOMY DIAL (section 14). Uncomment to preset; leave commented and
+# `dispatch.py onboard` will ask the owner in plain language and write it here.
+#   manual  - you write the issues; the Planner only files `proposed` issues when you
+#             explicitly run onboarding/revision; no backlog audits.
+#   propose - when the pipeline drains, the Planner audits and files `proposed` issues;
+#             you promote the ones you want to `ready`.
+#   auto    - the Planner files `ready` issues; the loop closes itself (v0.1.1 behaviour).
+autonomy: auto
+
 dispatcher:
-  agent: claude                      # Orca agent id used for every spawn
   poll_interval_seconds: 60
-  max_active_issues: 10              # issues with a live worktree at once; protects quota and Orca
-  idle_minutes_before_nudge: 15      # agent silent this long without a PR/label -> one nudge
-  idle_minutes_after_nudge: 15       # still silent -> label needs-human
-  cleanup_worktrees_on_merge: true   # remove the developer worktree when its PR merges into dev
-  docs_only:                         # a PR touching only these is auto state:tested (tester skipped)
-    prefixes: [docs/]
-    suffixes: [.md, .txt]
+  max_active_issues: 3               # concurrent headless Implementer runs. These are real
+                                     # local processes doing real work; 3 keeps a laptop
+                                     # usable. Raise it on a workstation if you like --
+                                     # idle hoarding is gone, this only bounds LIVE work.
+  max_run_minutes: 30                # hard wall-clock ceiling per run; then kill + breaker
+  retry_empty_run: true              # one fresh retry when a run exits without a PR
+  cleanup_worktrees_on_merge: true
+  claude_cmd: claude                 # absolute path if the scheduled task cannot find it
+  permission_args: ["--dangerously-skip-permissions"]   # see "How a headless run works"
+  extra_args: []                     # e.g. ["--model", "claude-sonnet-4-6"]
+  interactive_agent: claude          # Orca agent id for the interview sessions only
   notify:
-    github_mention: "@IdseVal"       # mentioned on GitHub when an agent needs the human; GitHub e-mails mentions
-    # SMTP_* environment variables (same names as the daily digest) add an e-mail on top, if set.
+    # Ships EMPTY on purpose (v0.2.1): no instant pings; everything that needs you
+    # reaches you in the daily digest (section 11). Put "@YourHandle" here only if you
+    # WANT to be @-mentioned (and therefore e-mailed by GitHub) the moment something
+    # needs a human.
+    github_mention: ""
 
 gates:
-  core_document:                     # nothing is dispatched until the PO's core document is on `dev`
+  core_document:                     # nothing is dispatched until the Planner's core document is on `dev`
     path: docs/CORE_DOCUMENT.md
     empty_marker: "Status: EMPTY"
-    achieved_marker: "Status: ACHIEVED"  # once on `dev`, dispatching stops and the human is paged;
-                                         # `dispatch.py onboard` runs a revision interview to reopen
+    achieved_marker: "Status: ACHIEVED"
 
-# Role prompts are HOST-LEVEL at ~/.orca/roles/<role>.md and shared across every project.
-# This block only lists the baseline skills each role is told it has.
-roles:
-  po-analyst:
-    skills: [handoff, grill-with-docs, domain-modeling]
-  architect:
-    skills: [handoff, improve-codebase-architecture, codebase-design]
-  researcher:
-    skills: [handoff, just-scrape, diagnosing-bugs]
-  developer:
-    skills: [handoff]                # baseline; labels add to it
-  tester:
-    skills: [handoff, tdd, webapp-testing]
-  reviewer:
-    skills: [handoff, code-review]
-
-# A label is a claim about the work. It earns the skills that work needs and no others.
+# A label is a claim about the work. It earns the skills that work needs; the dispatcher
+# writes the matching names into the run's brief. All skills are available to every run
+# (they are committed in .claude/skills/); this map is the explicit pointer.
 labels:
   ui:
-    skills: [frontend-design, web-design-guidelines, high-end-visual-design]
+    skills: [frontend-design, web-design-guidelines, high-end-visual-design, webapp-testing]
   seo:
     skills: [seo-audit]
   scraper:
@@ -54,19 +53,25 @@ labels:
     skills: [diagnosing-bugs]
   data:
     skills: [codebase-design]
+  research:
+    skills: [just-scrape]
+  architecture:
+    skills: [improve-codebase-architecture, codebase-design]
 
-pipelines:
-  default:
-    stages: [developer, tester, reviewer]
-  # `trivial` skips the TESTER, never the reviewer. The Reviewer refuses the label when the
-  # change turns out to touch behaviour: it is a request, not a permission.
-  trivial:
-    stages: [developer, reviewer]
-    forbid_labels: [ui, scraper, data]
+# Baseline skills named in every brief, per role; labels add to these.
+roles:
+  planner:
+    skills: [handoff, grill-with-docs, domain-modeling]
+  architect:
+    skills: [handoff, improve-codebase-architecture, codebase-design]
+  implementer:
+    skills: [handoff, tdd]
 
 circuit_breaker:
-  max_cycles: 3                      # dispatches + send-backs per issue before `escalated`
+  max_cycles: 3                      # runs + send-backs per issue before `escalated`
 
+# Enforced by the CI Reviewer (section 8 embeds the same rules in its prompt); kept here
+# as the single written source both the Implementer and the Reviewer are pointed at.
 evidence_gates:
   - id: counts-reconciled
     applies_to: [data, pipeline]

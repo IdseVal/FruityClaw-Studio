@@ -1,0 +1,216 @@
+name: Agent pipeline
+
+# The mechanical half of the workflow: Verifier + Reviewer, on ephemeral runners.
+# Chained with `needs:` inside ONE workflow on purpose -- labels set with the built-in
+# Actions token do NOT trigger other workflows, so label-chained designs die silently.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches: [dev]
+
+permissions:
+  contents: write        # merge into dev
+  pull-requests: write   # labels, comments, merge
+  issues: write          # read/label linked issues
+
+# A new push makes the previous run obsolete: cancel it. This is the cost brake.
+concurrency:
+  group: agent-pipeline-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  classify:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      skip_verify: ${{ steps.decide.outputs.skip_verify }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Clear stale pipeline labels from the previous round
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          gh pr edit "$PR" --remove-label state:tested  || true
+          gh pr edit "$PR" --remove-label state:blocked || true
+
+      - name: Decide docs-only / trivial
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          set -uo pipefail
+          git fetch -q origin dev
+          files=$(git diff --name-only "origin/dev...HEAD")
+          docs_only=true
+          if [ -z "$files" ]; then docs_only=false; fi
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            case "$f" in
+              docs/*|*.md|*.txt) ;;
+              *) docs_only=false ;;
+            esac
+          done <<< "$files"
+
+          trivial=false
+          issue=$(printf '%s' "$HEAD_REF" | grep -oE 'issue-[0-9]+' | grep -oE '[0-9]+' | head -n1 || true)
+          if [ -n "$issue" ]; then
+            if gh issue view "$issue" --json labels --jq '.labels[].name' | grep -qx 'trivial'; then
+              trivial=true
+            fi
+          fi
+
+          skip=false
+          if [ "$docs_only" = true ]; then
+            skip=true
+            gh pr edit "$PR" --add-label state:tested || true
+            gh pr comment "$PR" --body "Verifier skipped (docs-only change); the Reviewer still reads every line." || true
+          elif [ "$trivial" = true ]; then
+            skip=true
+            gh pr edit "$PR" --add-label state:tested || true
+            gh pr comment "$PR" --body "Verifier skipped (issue labelled trivial); the Reviewer still reads every line -- trivial is a request, not a permission." || true
+          fi
+          echo "skip_verify=$skip" >> "$GITHUB_OUTPUT"
+
+  verify:
+    needs: classify
+    if: needs.classify.outputs.skip_verify != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # --- Project toolchain (ADAPTED for FruityClaw Studio) ---------------------------
+      # This project is a C++/Qt desktop application built with MSVC on the Windows host;
+      # that toolchain cannot run on this Linux runner. The Verifier therefore judges the
+      # diff, the specs and the evidence the Implementer put in the PR body (build output,
+      # test runs from the host) rather than compiling here. If a runner-buildable test
+      # target ever appears (e.g. Qt-free unit tests via CMake), add its setup here.
+      # ---------------------------------------------------------------------------------
+
+      - name: Verifier agent
+        uses: anthropics/claude-code-action@v1
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          # Set exactly ONE of these two secrets (OWNER STEP 2). If the action version
+          # you are on rejects an empty input, delete the unused line.
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: "--max-turns 80"
+          prompt: |
+            You are the VERIFIER for pull request #${{ github.event.pull_request.number }}
+            into `dev`. You are a fresh, independent, adversarial check on an
+            Implementer's work. You run headless in CI; everything you want a human or
+            the next agent to know goes on the pull request via `gh`.
+
+            Do these in order:
+            1. `gh pr view ${{ github.event.pull_request.number }} --comments` and
+               `git diff origin/dev...HEAD`. Read the linked issue
+               (`gh issue view <n> --comments` -- the branch is named issue-<n>), the
+               relevant `docs/specs/*.md` and `docs/CORE_DOCUMENT.md`.
+            2. Run everything that exists: test suite, linters, type checks, builds.
+               Use the `tdd` and `webapp-testing` skills in `.claude/skills/` to judge
+               test quality. Then probe the change yourself against the issue's
+               acceptance criteria -- execute it, poke its edges, try to break it.
+            3. Check that new behaviour has tests. Missing or cosmetic tests are a
+               failure: name exactly which behaviours are untested. Remember: a fake
+               that behaves better than the real thing proves nothing. DO NOT edit or
+               commit code yourself -- weak work is a message to the Implementer, not
+               something you patch.
+            4. FMEA (only for changes labelled `data`, `ui` or `pipeline`, or that touch
+               data fetching, storage or core frontend): before judging, write a failure
+               matrix as a PR comment -- | Component | Failure Mode | Default Recovery |
+               Human Confirmation Needed? |. If any row genuinely needs the human's
+               judgement, post the table, add BOTH labels `needs-human` and
+               `state:blocked` (`gh pr edit N --add-label needs-human --add-label state:blocked`),
+               comment that the owner should answer each flagged row in a PR comment and
+               then remove the `needs-human` label, and STOP -- that is a valid, complete
+               outcome. Otherwise include the table in your final comment.
+            5. Finish with EXACTLY ONE of:
+               - PASS:  `gh pr edit ${{ github.event.pull_request.number }} --add-label state:tested`
+                 then a comment: what ran, counts, what you probed.
+               - FAIL:  `gh pr edit ${{ github.event.pull_request.number }} --add-label state:blocked`
+                 then a comment: exactly what failed and what the Implementer must change,
+                 as a numbered list.
+               A run that ends without a label stalls the pipeline. Never merge anything.
+
+  review:
+    needs: [classify, verify]
+    if: >-
+      !cancelled() &&
+      needs.classify.result == 'success' &&
+      (needs.verify.result == 'success' || needs.verify.result == 'skipped')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Stand down if the Verifier blocked the PR
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          if gh pr view "$PR" --json labels --jq '.labels[].name' | grep -qx 'state:blocked'; then
+            echo "blocked=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "blocked=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Reviewer agent
+        if: steps.gate.outputs.blocked != 'true'
+        uses: anthropics/claude-code-action@v1
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: "--max-turns 60"
+          prompt: |
+            You are the REVIEWER for pull request #${{ github.event.pull_request.number }}
+            into `dev`. You are the last gate before integration. Fresh context, headless,
+            in CI; everything you decide goes on the pull request via `gh`.
+
+            Do these in order:
+            1. `gh pr view ${{ github.event.pull_request.number }} --comments`,
+               `git diff origin/dev...HEAD`, the linked issue (branch is issue-<n>), the
+               relevant `docs/specs/*.md`, `docs/adrs/*.md` and `docs/CORE_DOCUMENT.md`.
+               Use the `code-review` skill in `.claude/skills/`.
+            2. Verify the change strictly fulfils the specification and does not
+               contradict the core document. Enforce the code standard: easily readable,
+               minimalist code -- reject unnecessary abstraction, premature
+               generalisation, and design patterns the problem did not ask for.
+            3. Evidence gates (for PRs labelled `data`, `ui` or `pipeline` -- read
+               `evidence_gates` in `.orca/dispatch.yml`): the PR body must contain a
+               count reconciled against an independent source, real output sampled in,
+               and cost against a documented budget where one exists. Green tests alone
+               are not evidence. "It completed" is not a count.
+            4. For docs-only PRs (ADRs, specs, research): file names follow
+               `docs/adrs/ADR-<issue#>-<slug>.md` / `docs/specs/<topic>.md` /
+               `docs/research/issue-<issue#>-<slug>.md`; links resolve; numbering does
+               not collide with ADRs already on `dev`; one decision per ADR with
+               rejected alternatives.
+            5. If the Verifier was skipped for `trivial` but the change touches
+               behaviour: that label was a request, not a permission -- send it back for
+               tests.
+            6. Decide, with EXACTLY ONE of:
+               - APPROVE: `gh pr merge ${{ github.event.pull_request.number }} --squash --delete-branch`
+                 (this merges into `dev`), then one paragraph of review as a comment.
+                 If the merge fails on conflicts, treat it as CHANGES and ask for a
+                 rebase.
+               - CHANGES: `gh pr edit ${{ github.event.pull_request.number }} --add-label state:blocked --remove-label state:tested`
+                 then a NUMBERED comment of required changes.
+            You may merge into `dev` and only `dev`; never `main`. You never close
+            issues; the dispatcher does that on merge.
