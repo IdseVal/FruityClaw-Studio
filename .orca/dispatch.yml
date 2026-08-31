@@ -22,7 +22,8 @@ dispatcher:
   max_run_minutes: 30                # hard wall-clock ceiling per run; then kill + breaker
   retry_empty_run: true              # one fresh retry when a run exits without a PR
   cleanup_worktrees_on_merge: true
-  claude_cmd: claude                 # absolute path if the scheduled task cannot find it
+  claude_cmd: C:\Users\idse_\.npm-global\claude.cmd   # absolute path: `claude` alone is not
+                                     # resolvable by subprocess on Windows (npm .cmd shim)
   permission_args: ["--dangerously-skip-permissions"]   # see "How a headless run works"
   extra_args: []                     # e.g. ["--model", "claude-sonnet-4-6"]
   interactive_agent: claude          # Orca agent id for the interview sessions only
