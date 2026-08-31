@@ -1,6 +1,6 @@
 * text=auto eol=lf
 
-# Executed inside the Linux dev container, which bind-mounts the working tree rather than a
-# fresh checkout. A CRLF here is invisible on Windows and fails in the container with
-# `set: pipefail: invalid option name`, which points nowhere near the real cause.
+# Executed inside Linux (the dev container, and every GitHub Actions runner). A CRLF here
+# is invisible on Windows and fails on Linux with `set: pipefail: invalid option name`,
+# which points nowhere near the real cause.
 *.sh text eol=lf

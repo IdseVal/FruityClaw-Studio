@@ -2,13 +2,15 @@ mail/__pycache__/
 .orca/dispatcher/__pycache__/
 .orca/dispatcher/state.json
 .orca/dispatcher/state.tmp
+.orca/dispatcher/paused.json
+.orca/dispatcher/paused.tmp
 .orca/dispatcher/prompts/
-
+.orca/dispatcher/runs/
+.orca/dispatcher/dispatcher.lock
+.orca/dispatcher/dispatcher.log*
 
 # scraping / research scratch output
 .just-scrape/
-.orca/dispatcher/dispatcher.lock
-.orca/dispatcher/dispatcher.log*
 
 # build output
 build/
